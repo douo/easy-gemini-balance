@@ -489,20 +489,5 @@ class KeyBalancer:
             'source_distribution': stats.get('source_distribution', {}),
         }
     
-    # 通过 key_manager 访问数据库功能（不重复实现）
-    def import_keys_from_file(self, file_path: str, source: str = "imported") -> Dict:
-        """Import keys from file via key_manager."""
-        return self.key_manager.import_keys_from_file(file_path, source)
-    
-    def add_key(self, key_value: str, weight: float = 1.0, source: str = "manual") -> bool:
-        """Add key via key_manager."""
-        return self.key_manager.add_key(key_value, weight, source)
-    
-    def remove_key(self, key_value: str) -> bool:
-        """Remove key via key_manager."""
-        return self.key_manager.remove_key(key_value)
-    
-    def get_import_history(self) -> List[Dict]:
-        """Get import history via key_manager."""
-        return self.key_manager.get_import_history()
+
 

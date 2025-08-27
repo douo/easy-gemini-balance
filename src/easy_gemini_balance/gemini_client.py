@@ -218,22 +218,7 @@ class GeminiClientWrapper:
         """获取当前 API key（如果存在）"""
         return self._current_key
     
-    # 通过 balancer 访问数据库功能（不重复实现）
-    def import_keys_from_file(self, file_path: str, source: str = "imported") -> dict:
-        """Import keys from file via balancer."""
-        return self.balancer.import_keys_from_file(file_path, source)
-    
-    def add_key(self, key_value: str, weight: float = 1.0, source: str = "manual") -> bool:
-        """Add key via balancer."""
-        return self.balancer.add_key(key_value, weight, source)
-    
-    def remove_key(self, key_value: str) -> bool:
-        """Remove key via balancer."""
-        return self.balancer.remove_key(key_value)
-    
-    def get_import_history(self) -> List[dict]:
-        """Get import history via balancer."""
-        return self.balancer.get_import_history()
+
 
 
 # 便捷函数

@@ -59,6 +59,12 @@ result = wrapper.execute_with_retry(generate_text)
 
 > **注意**: 为了确保重试机制的可靠性，我们移除了上下文管理器支持，现在提供两种更稳定的重试方式。
 
+**职责分工**：
+- **CLI**: 一般用户管理 keys 的主要方式（推荐）
+- **KeyManager**: 高级用户和开发者精细控制 key 管理
+- **KeyBalancer**: 负责 key 选择和负载均衡
+- **GeminiClientWrapper**: 负责 API 调用和重试
+
 ### 1. 自动重试和 Key 管理
 
 ```python
@@ -93,10 +99,6 @@ balancer = KeyBalancer(
     auto_success=True      # 自动标记成功
 )
 
-# 添加 keys
-balancer.add_key("your_api_key_1", weight=2.0, source="production")
-balancer.add_key("your_api_key_2", weight=1.5, source="development")
-
 # 获取单个 key
 api_key = balancer.get_single_key()
 
@@ -122,17 +124,46 @@ def my_api_function():
     return "API result"
 ```
 
-### 4. 批量导入 Keys
+### 4. 直接使用 KeyManager
+
+如果你需要精细控制 key 管理，可以直接使用 `KeyManager`：
 
 ```python
-# 从文件导入
-wrapper.import_keys_from_file("keys.txt", source="imported")
+from easy_gemini_balance import KeyManager
 
-# 手动添加
-wrapper.add_key("key_value", weight=1.0, source="manual")
+# 创建 key manager 实例
+key_manager = KeyManager()
+
+# 添加单个 key
+key_manager.add_key("your_api_key", weight=2.0, source="production")
+
+# 从文件导入 keys
+key_manager.import_keys_from_file("keys.txt", source="imported")
+
+# 查看统计信息
+stats = key_manager.get_key_stats()
+print(f"总 Keys: {stats['total_keys']}")
+
+# 获取导入历史
+history = key_manager.get_import_history()
 ```
 
-### 5. 性能监控和统计
+### 5. 批量导入 Keys
+
+```python
+# 方式1：通过 CLI（推荐）
+# easy-gemini-balance import keys.txt
+# easy-gemini-balance add-key "key_value" --weight 1.5
+
+# 方式2：通过代码（高级用户）
+from easy_gemini_balance import KeyManager
+
+key_manager = KeyManager()
+key_manager.import_keys_from_file("keys.txt", source="imported")
+key_manager.add_key("key_value", weight=1.0, source="manual")
+```
+
+### 6. 性能监控和统计
 
 ```python
 # 获取详细统计信息
