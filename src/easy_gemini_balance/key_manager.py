@@ -1,15 +1,16 @@
 """
-API Key Manager for handling key loading, storage, and weight management.
+API Key Manager for handling key storage and weight management using SSOT pattern.
+All data is stored in and retrieved from SQLite database.
 """
 
 import os
 import sqlite3
-import hashlib
 import threading
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timedelta
 import time
+from pathlib import Path
 
 
 @dataclass
@@ -26,6 +27,7 @@ class APIKey:
     error_count: int = 0
     consecutive_errors: int = 0
     added_time: datetime = field(default_factory=datetime.now)
+    source: str = "database"  # 来源标识：database, imported, manual
     
     def mark_used(self):
         """Mark the key as recently used."""
@@ -70,6 +72,7 @@ class APIKey:
             'last_used': self.last_used.isoformat() if self.last_used else None,
             'last_error': self.last_error.isoformat() if self.last_error else None,
             'added_time': self.added_time.isoformat(),
+            'source': self.source,
         }
     
     @classmethod
@@ -81,6 +84,7 @@ class APIKey:
             is_available=data.get('is_available', True),
             error_count=data.get('error_count', 0),
             consecutive_errors=data.get('consecutive_errors', 0),
+            source=data.get('source', 'database'),
         )
         
         if data.get('last_used'):
@@ -94,7 +98,7 @@ class APIKey:
 
 
 class SQLiteKeyStore:
-    """SQLite-based key storage for efficient persistence."""
+    """SQLite-based key storage for efficient persistence using SSOT pattern."""
     
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -107,7 +111,7 @@ class SQLiteKeyStore:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # 创建keys表
+            # 创建keys表，key字段设置为UNIQUE约束
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS api_keys (
                     key TEXT PRIMARY KEY,
@@ -118,7 +122,8 @@ class SQLiteKeyStore:
                     last_used TEXT,
                     last_error TEXT,
                     added_time TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_time TEXT DEFAULT CURRENT_TIMESTAMP
+                    updated_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                    source TEXT DEFAULT 'database'
                 )
             ''')
             
@@ -127,65 +132,159 @@ class SQLiteKeyStore:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_weight ON api_keys(weight)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_last_used ON api_keys(last_used)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_error_count ON api_keys(error_count)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_source ON api_keys(source)')
             
-            # 创建文件变更记录表
+            # 创建导入历史表
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS file_changes (
+                CREATE TABLE IF NOT EXISTS import_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_path TEXT NOT NULL,
-                    file_hash TEXT NOT NULL,
-                    change_time TEXT DEFAULT CURRENT_TIMESTAMP
+                    source_file TEXT NOT NULL,
+                    import_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                    keys_count INTEGER DEFAULT 0,
+                    new_keys INTEGER DEFAULT 0,
+                    updated_keys INTEGER DEFAULT 0,
+                    skipped_keys INTEGER DEFAULT 0
                 )
             ''')
             
             conn.commit()
             conn.close()
     
-    def save_keys(self, keys: List[APIKey]):
-        """Save keys to database efficiently using batch operations."""
+    def insert_key(self, key: APIKey) -> bool:
+        """
+        Insert a new key into database.
+        
+        Args:
+            key: APIKey object to insert
+            
+        Returns:
+            True if inserted successfully, False if key already exists
+        """
         with self.lock:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
             try:
-                # 使用事务进行批量插入/更新
-                cursor.execute('BEGIN TRANSACTION')
+                cursor.execute('''
+                    INSERT INTO api_keys 
+                    (key, weight, is_available, error_count, consecutive_errors, 
+                     last_used, last_error, added_time, updated_time, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    key.key,
+                    key.weight,
+                    1 if key.is_available else 0,
+                    key.error_count,
+                    key.consecutive_errors,
+                    key.last_used.isoformat() if key.last_used else None,
+                    key.last_error.isoformat() if key.last_error else None,
+                    key.added_time.isoformat(),
+                    datetime.now().isoformat(),
+                    key.source
+                ))
                 
-                for key in keys:
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO api_keys 
-                        (key, weight, is_available, error_count, consecutive_errors, 
-                         last_used, last_error, added_time, updated_time)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        key.key,
-                        key.weight,
-                        1 if key.is_available else 0,
-                        key.error_count,
-                        key.consecutive_errors,
-                        key.last_used.isoformat() if key.last_used else None,
-                        key.last_error.isoformat() if key.last_error else None,
-                        key.added_time.isoformat(),
-                        datetime.now().isoformat()
-                    ))
+                conn.commit()
+                return True
                 
-                cursor.execute('COMMIT')
-                
-            except Exception as e:
-                cursor.execute('ROLLBACK')
-                raise e
+            except sqlite3.IntegrityError:
+                # Key already exists
+                return False
             finally:
                 conn.close()
     
-    def load_keys(self) -> List[APIKey]:
-        """Load all keys from database."""
+    def upsert_key(self, key: APIKey) -> bool:
+        """
+        Insert or update a key in database.
+        
+        Args:
+            key: APIKey object to insert/update
+            
+        Returns:
+            True if operation successful
+        """
+        with self.lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO api_keys 
+                    (key, weight, is_available, error_count, consecutive_errors, 
+                     last_used, last_error, added_time, updated_time, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    key.key,
+                    key.weight,
+                    1 if key.is_available else 0,
+                    key.error_count,
+                    key.consecutive_errors,
+                    key.last_used.isoformat() if key.last_used else None,
+                    key.last_error.isoformat() if key.last_error else None,
+                    key.added_time.isoformat(),
+                    datetime.now().isoformat(),
+                    key.source
+                ))
+                
+                conn.commit()
+                return True
+                
+            finally:
+                conn.close()
+    
+    def get_key(self, key_value: str) -> Optional[APIKey]:
+        """
+        Get a specific key from database.
+        
+        Args:
+            key_value: The actual key string
+            
+        Returns:
+            APIKey object or None if not found
+        """
         with self.lock:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
             cursor.execute('''
                 SELECT key, weight, is_available, error_count, consecutive_errors,
-                       last_used, last_error, added_time
+                       last_used, last_error, added_time, source
+                FROM api_keys
+                WHERE key = ?
+            ''', (key_value,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                key = APIKey(
+                    key=row[0],
+                    weight=row[1],
+                    is_available=bool(row[2]),
+                    error_count=row[3],
+                    consecutive_errors=row[4],
+                    source=row[7]
+                )
+                
+                if row[5]:  # last_used
+                    key.last_used = datetime.fromisoformat(row[5])
+                if row[6]:  # last_error
+                    key.last_error = datetime.fromisoformat(row[6])
+                if row[7]:  # added_time
+                    key.added_time = datetime.fromisoformat(row[7])
+                
+                return key
+            
+            return None
+    
+    def get_all_keys(self) -> List[APIKey]:
+        """Get all keys from database."""
+        with self.lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT key, weight, is_available, error_count, consecutive_errors,
+                       last_used, last_error, added_time, source
                 FROM api_keys
                 ORDER BY key
             ''')
@@ -197,7 +296,45 @@ class SQLiteKeyStore:
                     weight=row[1],
                     is_available=bool(row[2]),
                     error_count=row[3],
-                    consecutive_errors=row[4]
+                    consecutive_errors=row[4],
+                    source=row[7]
+                )
+                
+                if row[5]:  # last_used
+                    key.last_used = datetime.fromisoformat(row[5])
+                if row[6]:  # last_error
+                    key.last_error = datetime.fromisoformat(row[6])
+                if row[7]:  # added_time
+                    key.added_time = datetime.fromisoformat(row[7])
+                
+                keys.append(key)
+            
+            conn.close()
+            return keys
+    
+    def get_available_keys(self) -> List[APIKey]:
+        """Get all available keys from database."""
+        with self.lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT key, weight, is_available, error_count, consecutive_errors,
+                       last_used, last_error, added_time, source
+                FROM api_keys
+                WHERE is_available = 1
+                ORDER BY weight DESC, last_used ASC
+            ''')
+            
+            keys = []
+            for row in cursor.fetchall():
+                key = APIKey(
+                    key=row[0],
+                    weight=row[1],
+                    is_available=bool(row[2]),
+                    error_count=row[3],
+                    consecutive_errors=row[4],
+                    source=row[7]
                 )
                 
                 if row[5]:  # last_used
@@ -237,37 +374,150 @@ class SQLiteKeyStore:
             conn.commit()
             conn.close()
     
-    def record_file_change(self, file_path: str, file_hash: str):
-        """Record file change for change detection."""
+    def delete_key(self, key_value: str) -> bool:
+        """
+        Delete a key from database.
+        
+        Args:
+            key_value: The actual key string
+            
+        Returns:
+            True if deleted successfully, False if not found
+        """
         with self.lock:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            cursor.execute('''
-                INSERT INTO file_changes (file_path, file_hash, change_time)
-                VALUES (?, ?, ?)
-            ''', (file_path, file_hash, datetime.now().isoformat()))
+            cursor.execute('DELETE FROM api_keys WHERE key = ?', (key_value,))
+            deleted = cursor.rowcount > 0
             
             conn.commit()
             conn.close()
+            
+            return deleted
     
-    def get_last_file_hash(self, file_path: str) -> Optional[str]:
-        """Get the last recorded hash for a file."""
+    def import_keys_from_file(self, file_path: str, source: str = "imported") -> Dict:
+        """
+        Import keys from a text file into database.
+        
+        Args:
+            file_path: Path to the text file containing API keys
+            source: Source identifier for imported keys
+            
+        Returns:
+            Dictionary with import statistics
+        """
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Keys file not found: {file_path}")
+        
+        with self.lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            try:
+                # 开始事务
+                cursor.execute('BEGIN TRANSACTION')
+                
+                # 读取文件
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                new_keys = 0
+                updated_keys = 0
+                skipped_keys = 0
+                
+                for line_num, line in enumerate(lines, 1):
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        # 支持权重格式: key:weight 或 key
+                        if ':' in line:
+                            key_part, weight_part = line.split(':', 1)
+                            try:
+                                weight = float(weight_part.strip())
+                            except ValueError:
+                                weight = 1.0
+                            key_str = key_part.strip()
+                        else:
+                            key_str = line
+                            weight = 1.0
+                        
+                        # 检查key是否已存在
+                        existing_key = self.get_key(key_str)
+                        if existing_key:
+                            # 更新现有key的权重
+                            if abs(existing_key.weight - weight) > 0.01:
+                                existing_key.weight = weight
+                                self.update_key(existing_key)
+                                updated_keys += 1
+                            else:
+                                skipped_keys += 1
+                        else:
+                            # 插入新key
+                            new_key = APIKey(
+                                key=key_str,
+                                weight=weight,
+                                source=source
+                            )
+                            if self.insert_key(new_key):
+                                new_keys += 1
+                            else:
+                                skipped_keys += 1
+                
+                # 记录导入历史
+                cursor.execute('''
+                    INSERT INTO import_history 
+                    (source_file, keys_count, new_keys, updated_keys, skipped_keys)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    file_path,
+                    len(lines),
+                    new_keys,
+                    updated_keys,
+                    skipped_keys
+                ))
+                
+                # 提交事务
+                cursor.execute('COMMIT')
+                
+                return {
+                    'total_lines': len(lines),
+                    'new_keys': new_keys,
+                    'updated_keys': updated_keys,
+                    'skipped_keys': skipped_keys,
+                    'source': source
+                }
+                
+            except Exception as e:
+                cursor.execute('ROLLBACK')
+                raise e
+            finally:
+                conn.close()
+    
+    def get_import_history(self) -> List[Dict]:
+        """Get import history from database."""
         with self.lock:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT file_hash FROM file_changes 
-                WHERE file_path = ? 
-                ORDER BY change_time DESC 
-                LIMIT 1
-            ''', (file_path,))
+                SELECT source_file, import_time, keys_count, new_keys, updated_keys, skipped_keys
+                FROM import_history
+                ORDER BY import_time DESC
+            ''')
             
-            result = cursor.fetchone()
+            history = []
+            for row in cursor.fetchall():
+                history.append({
+                    'source_file': row[0],
+                    'import_time': row[1],
+                    'keys_count': row[2],
+                    'new_keys': row[3],
+                    'updated_keys': row[4],
+                    'skipped_keys': row[5]
+                })
+            
             conn.close()
-            
-            return result[0] if result else None
+            return history
     
     def cleanup_old_keys(self, days_old: int) -> int:
         """Remove keys that haven't been used for specified days."""
@@ -306,6 +556,10 @@ class SQLiteKeyStore:
             cursor.execute('SELECT AVG(weight) FROM api_keys')
             avg_weight = cursor.fetchone()[0] or 0
             
+            # 按来源统计
+            cursor.execute('SELECT source, COUNT(*) FROM api_keys GROUP BY source')
+            source_stats = dict(cursor.fetchall())
+            
             # 数据库大小
             cursor.execute('PRAGMA page_count')
             page_count = cursor.fetchone()[0]
@@ -320,66 +574,68 @@ class SQLiteKeyStore:
                 'available_keys': available_keys,
                 'unavailable_keys': total_keys - available_keys,
                 'average_weight': round(avg_weight, 2),
+                'source_distribution': source_stats,
                 'database_size_bytes': db_size_bytes,
                 'database_size_mb': round(db_size_bytes / (1024 * 1024), 2)
             }
 
 
 class KeyManager:
-    """Manages API keys loaded from text files with weight and health tracking."""
+    """Manages API keys using SSOT pattern - all data from database."""
     
-    def __init__(self, keys_file: str = "keys.txt", db_path: str = "keys.db", 
-                 auto_save: bool = True, save_interval: int = 300):
+    def __init__(self, db_path: Optional[str] = None, auto_save: bool = True, 
+                 save_interval: int = 300):
         """
         Initialize the key manager.
         
         Args:
-            keys_file: Path to the text file containing API keys (one per line)
-            db_path: Path to the SQLite database for persisting key states
+            db_path: Path to the SQLite database (defaults to XDG_DATA_HOME)
             auto_save: Whether to automatically save state periodically
             save_interval: Auto-save interval in seconds
         """
-        self.keys_file = keys_file
+        if db_path is None:
+            # 使用 XDG_DATA_HOME 目录
+            xdg_data_home = os.environ.get('XDG_DATA_HOME')
+            if xdg_data_home:
+                data_dir = Path(xdg_data_home)
+            else:
+                data_dir = Path.home() / '.local' / 'share'
+            
+            # 创建 easy-gemini-balance 子目录
+            data_dir = data_dir / 'easy-gemini-balance'
+            data_dir.mkdir(parents=True, exist_ok=True)
+            
+            db_path = str(data_dir / 'keys.db')
+        
         self.db_path = db_path
         self.auto_save = auto_save
         self.save_interval = save_interval
         
         self.keys: List[APIKey] = []
-        self.keys_set: Set[str] = set()  # 用于快速查找
-        self.file_hash: Optional[str] = None
+        self.keys_set: Set[str] = set()
         self.last_save_time = datetime.now()
-        self.lock = threading.RLock()  # 读写锁
+        self.lock = threading.RLock()
         
         # 初始化SQLite存储
         self.key_store = SQLiteKeyStore(db_path)
         
-        # 加载持久化状态和keys文件
-        self._load_persisted_state()
-        self._load_keys()
+        # 从数据库加载所有keys
+        self._load_from_database()
         
         # 启动自动保存线程
         if self.auto_save:
             self._start_auto_save()
     
-    def _get_file_hash(self, file_path: str) -> str:
-        """Calculate MD5 hash of file content."""
+    def _load_from_database(self):
+        """Load all keys from database."""
         try:
-            with open(file_path, 'rb') as f:
-                content = f.read()
-                return hashlib.md5(content).hexdigest()
-        except (FileNotFoundError, IOError):
-            return ""
-    
-    def _load_persisted_state(self):
-        """Load persisted key states from SQLite database."""
-        try:
-            self.keys = self.key_store.load_keys()
+            self.keys = self.key_store.get_all_keys()
             self.keys_set = {key.key for key in self.keys}
             
             if self.keys:
                 print(f"✅ Loaded {len(self.keys)} keys from database: {self.db_path}")
             else:
-                print("ℹ️  No persisted keys found in database")
+                print("ℹ️  No keys found in database")
                 
         except Exception as e:
             print(f"⚠️  Error loading from database: {e}, starting fresh")
@@ -387,10 +643,11 @@ class KeyManager:
             self.keys_set = set()
     
     def _save_state(self):
-        """Save current key states to SQLite database."""
+        """Save current key states to database."""
         try:
             if self.keys:
-                self.key_store.save_keys(self.keys)
+                for key in self.keys:
+                    self.key_store.update_key(key)
                 self.last_save_time = datetime.now()
                 
         except Exception as e:
@@ -410,81 +667,67 @@ class KeyManager:
         save_thread = threading.Thread(target=auto_save_worker, daemon=True)
         save_thread.start()
     
-    def _load_keys(self):
-        """Load API keys from the text file and merge with existing state."""
-        if not os.path.exists(self.keys_file):
-            raise FileNotFoundError(f"Keys file not found: {self.keys_file}")
+    def import_keys_from_file(self, file_path: str, source: str = "imported") -> Dict:
+        """
+        Import keys from a text file into database.
         
-        # 计算文件hash
-        current_hash = self._get_file_hash(self.keys_file)
-        last_hash = self.key_store.get_last_file_hash(self.keys_file)
+        Args:
+            file_path: Path to the text file containing API keys
+            source: Source identifier for imported keys
+            
+        Returns:
+            Dictionary with import statistics
+        """
+        result = self.key_store.import_keys_from_file(file_path, source)
         
-        if current_hash == last_hash:
-            print("ℹ️  Keys file unchanged, skipping reload")
-            return
+        # 重新加载数据库
+        self._load_from_database()
         
-        self.file_hash = current_hash
-        self.key_store.record_file_change(self.keys_file, current_hash)
-        
-        with open(self.keys_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        new_keys = []
-        new_keys_set = set()
-        
-        for line_num, line in enumerate(lines, 1):
-            line = line.strip()
-            if line and not line.startswith('#'):
-                # 支持权重格式: key:weight 或 key
-                if ':' in line:
-                    key_part, weight_part = line.split(':', 1)
-                    try:
-                        weight = float(weight_part.strip())
-                    except ValueError:
-                        weight = 1.0
-                    key_str = key_part.strip()
-                else:
-                    key_str = line
-                    weight = 1.0
-                
-                new_keys_set.add(key_str)
-                
-                # 检查是否已存在
-                if key_str in self.keys_set:
-                    # 更新现有key的权重（如果文件中的权重不同）
-                    existing_key = next(k for k in self.keys if k.key == key_str)
-                    if abs(existing_key.weight - weight) > 0.01:  # 允许小的浮点误差
-                        existing_key.weight = weight
-                        print(f"ℹ️  Updated weight for key {key_str[:8]}... to {weight}")
-                else:
-                    # 创建新key
-                    new_key = APIKey(key=key_str, weight=weight)
-                    new_keys.append(new_key)
-                    print(f"➕ Added new key {key_str[:8]}... with weight {weight}")
-        
-        # 标记在文件中找不到的key为不可用
-        removed_count = 0
-        for key in self.keys:
-            if key.key not in new_keys_set:
-                if key.is_available:
-                    key.is_available = False
-                    removed_count += 1
-                    print(f"❌ Marked key {key.key[:8]}... as unavailable (not in file)")
-        
-        # 添加新keys
-        self.keys.extend(new_keys)
-        self.keys_set.update(new_keys_set)
-        
-        print(f"✅ Keys file reloaded: {len(new_keys)} new keys, {removed_count} marked unavailable")
-        print(f"📊 Total keys: {len(self.keys)}, Available: {len(self.get_available_keys())}")
-        
-        # 保存更新后的状态
-        self._save_state()
+        return result
     
-    def reload_keys(self):
-        """Reload keys from the file."""
-        with self.lock:
-            self._load_keys()
+    def add_key(self, key_value: str, weight: float = 1.0, source: str = "manual") -> bool:
+        """
+        Add a new key manually.
+        
+        Args:
+            key_value: The API key string
+            weight: Key weight
+            source: Source identifier
+            
+        Returns:
+            True if added successfully, False if key already exists
+        """
+        if key_value in self.keys_set:
+            return False
+        
+        new_key = APIKey(key=key_value, weight=weight, source=source)
+        
+        if self.key_store.insert_key(new_key):
+            self.keys.append(new_key)
+            self.keys_set.add(key_value)
+            return True
+        
+        return False
+    
+    def remove_key(self, key_value: str) -> bool:
+        """
+        Remove a key.
+        
+        Args:
+            key_value: The API key string
+            
+        Returns:
+            True if removed successfully, False if not found
+        """
+        if key_value not in self.keys_set:
+            return False
+        
+        if self.key_store.delete_key(key_value):
+            self.keys = [k for k in self.keys if k.key != key_value]
+            self.keys_set.remove(key_value)
+            return True
+        
+        return False
     
     def get_available_keys(self) -> List[APIKey]:
         """Get all available keys."""
@@ -515,37 +758,40 @@ class KeyManager:
                 elif error_code is not None:
                     key.mark_error(error_code)
                 
-                # 如果状态发生重要变化，立即保存
-                if not key.is_available or key.consecutive_errors > 5:
-                    self.key_store.update_key(key)
+                # 立即更新数据库
+                self.key_store.update_key(key)
     
     def get_key_stats(self) -> Dict:
         """Get statistics about all keys."""
-        with self.lock:
-            db_stats = self.key_store.get_stats()
-            
-            return {
-                'total_keys': db_stats['total_keys'],
-                'available_keys': db_stats['available_keys'],
-                'unavailable_keys': db_stats['unavailable_keys'],
-                'average_weight': db_stats['average_weight'],
-                'database_size_mb': db_stats['database_size_mb'],
-                'last_save': self.last_save_time.isoformat(),
-                'file_hash': self.file_hash,
-                'keys': [
-                    {
-                        'key': key.key[:8] + '...' if len(key.key) > 8 else key.key,
-                        'weight': round(key.weight, 2),
-                        'available': key.is_available,
-                        'error_count': key.error_count,
-                        'consecutive_errors': key.consecutive_errors,
-                        'last_used': key.last_used.isoformat() if key.last_used else None,
-                        'last_error': key.last_error.isoformat() if key.last_error else None,
-                        'added_time': key.added_time.isoformat(),
-                    }
-                    for key in self.keys
-                ]
-            }
+        db_stats = self.key_store.get_stats()
+        
+        return {
+            'total_keys': db_stats['total_keys'],
+            'available_keys': db_stats['available_keys'],
+            'unavailable_keys': db_stats['unavailable_keys'],
+            'average_weight': db_stats['average_weight'],
+            'source_distribution': db_stats['source_distribution'],
+            'database_size_mb': db_stats['database_size_mb'],
+            'last_save': self.last_save_time.isoformat(),
+            'keys': [
+                {
+                    'key': key.key[:8] + '...' if len(key.key) > 8 else key.key,
+                    'weight': round(key.weight, 2),
+                    'available': key.is_available,
+                    'error_count': key.error_count,
+                    'consecutive_errors': key.consecutive_errors,
+                    'last_used': key.last_used.isoformat() if key.last_used else None,
+                    'last_error': key.last_error.isoformat() if key.last_error else None,
+                    'added_time': key.added_time.isoformat(),
+                    'source': key.source,
+                }
+                for key in self.keys
+            ]
+        }
+    
+    def get_import_history(self) -> List[Dict]:
+        """Get import history."""
+        return self.key_store.get_import_history()
     
     def save_state_now(self):
         """Manually save state immediately."""
@@ -564,10 +810,8 @@ class KeyManager:
             removed_count = self.key_store.cleanup_old_keys(days_old)
             
             if removed_count > 0:
-                # 从内存中移除
-                self.keys = [key for key in self.keys if key.last_used is None or 
-                           (datetime.now() - key.last_used).days < days_old]
-                self.keys_set = {key.key for key in self.keys}
+                # 重新加载数据库
+                self._load_from_database()
                 print(f"🧹 Cleaned up {removed_count} old unused keys")
             
             return removed_count

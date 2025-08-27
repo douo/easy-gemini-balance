@@ -1,303 +1,207 @@
 #!/usr/bin/env python3
 """
-Command Line Interface for Easy Gemini Balance module.
-Provides easy access to statistics and key management functions.
+Command Line Interface for Easy Gemini Balance
+提供统计信息、健康检查、数据库管理等功能
 """
 
 import argparse
+import json
 import sys
-import os
 from pathlib import Path
-from typing import Optional, Dict, Any
-from datetime import datetime
+from typing import Optional
 
 from .balancer import KeyBalancer
-from .key_manager import KeyManager
+from .gemini_client import GeminiClientWrapper
 
 
 class EasyGeminiCLI:
-    """Command Line Interface for Easy Gemini Balance."""
+    """Command Line Interface for Easy Gemini Balance"""
     
     def __init__(self):
         self.parser = self._create_parser()
     
-    def _create_parser(self) -> argparse.ArgumentParser:
-        """Create the command line argument parser."""
+    def _create_parser(self):
+        """创建命令行参数解析器"""
         parser = argparse.ArgumentParser(
-            description="Easy Gemini Balance - API Key Management CLI",
+            description="Easy Gemini Balance - API Key Management Tool",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Examples:
-  # Show all statistics
-  %(prog)s stats --keys-file keys.txt --db-path keys.db
+  # 显示统计信息
+  easy-gemini-balance stats
   
-  # Show only key health status
-  %(prog)s health --keys-file keys.txt --db-path keys.db
+  # 导入 keys 文件
+  easy-gemini-balance import keys.txt
   
-  # Show database information
-  %(prog)s db-info --db-path keys.db
+  # 显示健康状态
+  easy-gemini-balance health
   
-  # Show memory usage
-  %(prog)s memory --keys-file keys.txt --db-path keys.db
+  # 添加单个 key
+  easy-gemini-balance add-key "AIzaSyYour_Key_Here" --weight 1.5
   
-  # Export statistics to JSON
-  %(prog)s export --keys-file keys.txt --db-path keys.db --output stats.json
-  
-  # Monitor real-time statistics
-  %(prog)s monitor --keys-file keys.txt --db-path keys.db --interval 5
+  # 显示导入历史
+  easy-gemini-balance import-history
             """
         )
         
-        # Subcommands
+        # 全局选项
+        parser.add_argument(
+            '--db-path',
+            help='Database file path (defaults to XDG_DATA_HOME)'
+        )
+        parser.add_argument(
+            '--verbose', '-v',
+            action='store_true',
+            help='Verbose output'
+        )
+        parser.add_argument(
+            '--json',
+            action='store_true',
+            help='Output in JSON format'
+        )
+        
+        # 子命令
         subparsers = parser.add_subparsers(
             dest='command',
             help='Available commands'
         )
         
-        # Stats command
+        # stats 命令
         stats_parser = subparsers.add_parser(
             'stats',
-            help='Show comprehensive statistics'
-        )
-        stats_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
-        )
-        stats_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        stats_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
-        )
-        stats_parser.add_argument(
-            '--json', '-j',
-            action='store_true',
-            help='Output in JSON format'
-        )
-        stats_parser.add_argument(
-            '--detailed', '-D',
-            action='store_true',
-            help='Show detailed key information'
+            help='Show key statistics'
         )
         
-        # Health command
+        # health 命令
         health_parser = subparsers.add_parser(
             'health',
             help='Show key health status'
         )
-        health_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
-        )
-        health_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        health_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
-        )
-        health_parser.add_argument(
-            '--json', '-j',
-            action='store_true',
-            help='Output in JSON format'
-        )
-        health_parser.add_argument(
-            '--filter',
-            choices=['all', 'available', 'unavailable', 'error'],
-            default='all',
-            help='Filter keys by status (default: all)'
-        )
         
-        # Database command
-        db_parser = subparsers.add_parser(
+        # db-info 命令
+        db_info_parser = subparsers.add_parser(
             'db-info',
             help='Show database information'
         )
-        db_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        db_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
-        )
-        db_parser.add_argument(
-            '--json', '-j',
-            action='store_true',
-            help='Output in JSON format'
-        )
         
-        # Memory command
+        # memory 命令
         memory_parser = subparsers.add_parser(
             'memory',
-            help='Show memory usage statistics'
-        )
-        memory_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
-        )
-        memory_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        memory_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
-        )
-        memory_parser.add_argument(
-            '--json', '-j',
-            action='store_true',
-            help='Output in JSON format'
+            help='Show memory usage information'
         )
         
-        # Export command
-        export_parser = subparsers.add_parser(
-            'export',
-            help='Export statistics to file'
+        # import 命令
+        import_parser = subparsers.add_parser(
+            'import',
+            help='Import keys from a text file'
         )
-        export_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
+        import_parser.add_argument(
+            'file_path',
+            help='Path to the text file containing API keys'
         )
-        export_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        export_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
-        )
-        export_parser.add_argument(
-            '--output', '-o',
-            required=True,
-            help='Output file path'
-        )
-        export_parser.add_argument(
-            '--format',
-            choices=['json', 'csv', 'txt'],
-            default='json',
-            help='Output format (default: json)'
+        import_parser.add_argument(
+            '--source',
+            default='imported',
+            help='Source identifier for imported keys (default: imported)'
         )
         
-        # Monitor command
-        monitor_parser = subparsers.add_parser(
-            'monitor',
-            help='Monitor real-time statistics'
+        # add-key 命令
+        add_key_parser = subparsers.add_parser(
+            'add-key',
+            help='Add a single API key'
         )
-        monitor_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
+        add_key_parser.add_argument(
+            'key_value',
+            help='The API key string'
         )
-        monitor_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
+        add_key_parser.add_argument(
+            '--weight',
+            type=float,
+            default=1.0,
+            help='Key weight (default: 1.0)'
         )
-        monitor_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
-        )
-        monitor_parser.add_argument(
-            '--interval', '-i',
-            type=int,
-            default=5,
-            help='Update interval in seconds (default: 5)'
-        )
-        monitor_parser.add_argument(
-            '--count', '-c',
-            type=int,
-            help='Number of updates (default: infinite)'
+        add_key_parser.add_argument(
+            '--source',
+            default='manual',
+            help='Source identifier (default: manual)'
         )
         
-        # List command
+        # remove-key 命令
+        remove_key_parser = subparsers.add_parser(
+            'remove-key',
+            help='Remove an API key'
+        )
+        remove_key_parser.add_argument(
+            'key_value',
+            help='The API key string to remove'
+        )
+        
+        # list 命令
         list_parser = subparsers.add_parser(
             'list',
             help='List all keys'
         )
         list_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
-        )
-        list_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        list_parser.add_argument(
-            '--verbose', '-v',
+            '--available-only',
             action='store_true',
-            help='Enable verbose output'
+            help='Show only available keys'
         )
         list_parser.add_argument(
-            '--json', '-j',
+            '--by-source',
             action='store_true',
-            help='Output in JSON format'
-        )
-        list_parser.add_argument(
-            '--sort-by',
-            choices=['key', 'weight', 'last_used', 'error_count', 'status'],
-            default='key',
-            help='Sort keys by field (default: key)'
-        )
-        list_parser.add_argument(
-            '--limit', '-l',
-            type=int,
-            help='Limit number of keys to show'
+            help='Group keys by source'
         )
         
-        # Reset command
+        # import-history 命令
+        import_history_parser = subparsers.add_parser(
+            'import-history',
+            help='Show import history'
+        )
+        
+        # reset 命令
         reset_parser = subparsers.add_parser(
             'reset',
-            help='Reset key weights and status'
-        )
-        reset_parser.add_argument(
-            '--keys-file', '-k',
-            default='keys.txt',
-            help='Path to the keys file (default: keys.txt)'
-        )
-        reset_parser.add_argument(
-            '--db-path', '-d',
-            default='keys.db',
-            help='Path to the SQLite database (default: keys.db)'
-        )
-        reset_parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='Enable verbose output'
+            help='Reset key weights and health status'
         )
         reset_parser.add_argument(
             '--confirm',
             action='store_true',
-            help='Confirm reset operation'
+            help='Confirm the reset operation'
+        )
+        
+        # cleanup 命令
+        cleanup_parser = subparsers.add_parser(
+            'cleanup',
+            help='Clean up old unused keys'
+        )
+        cleanup_parser.add_argument(
+            '--days',
+            type=int,
+            default=30,
+            help='Remove keys unused for N days (default: 30)'
+        )
+        cleanup_parser.add_argument(
+            '--confirm',
+            action='store_true',
+            help='Confirm the cleanup operation'
+        )
+        
+        # monitor 命令
+        monitor_parser = subparsers.add_parser(
+            'monitor',
+            help='Monitor key usage in real-time'
+        )
+        monitor_parser.add_argument(
+            '--interval',
+            type=int,
+            default=5,
+            help='Update interval in seconds (default: 5)'
         )
         
         return parser
     
-    def run(self, args: Optional[list] = None) -> int:
-        """Run the CLI with given arguments."""
-        if args is None:
-            args = sys.argv[1:]
-        
+    def run(self, args: Optional[list] = None):
+        """运行 CLI"""
         parsed_args = self.parser.parse_args(args)
         
         if not parsed_args.command:
@@ -308,475 +212,354 @@ Examples:
             return self._execute_command(parsed_args)
         except KeyboardInterrupt:
             print("\n❌ Operation cancelled by user")
-            return 130
+            return 1
         except Exception as e:
-            if hasattr(parsed_args, 'verbose') and parsed_args.verbose:
-                import traceback
-                traceback.print_exc()
-            else:
-                print(f"❌ Error: {e}")
+            if parsed_args.verbose:
+                raise
+            print(f"❌ Error: {e}")
             return 1
     
-    def _execute_command(self, args: argparse.Namespace) -> int:
-        """Execute the specified command."""
-        if hasattr(args, 'verbose') and args.verbose:
-            if hasattr(args, 'keys_file'):
-                print(f"🔧 Using keys file: {args.keys_file}")
-            if hasattr(args, 'db_path'):
-                print(f"🗄️  Using database: {args.db_path}")
-            print()
+    def _execute_command(self, args):
+        """执行具体的命令"""
+        # 创建 KeyBalancer 实例
+        balancer = KeyBalancer(db_path=args.db_path)
         
         if args.command == 'stats':
-            return self._show_stats(args)
+            return self._show_stats(balancer, args)
         elif args.command == 'health':
-            return self._show_health(args)
+            return self._show_health(balancer, args)
         elif args.command == 'db-info':
-            return self._show_db_info(args)
+            return self._show_db_info(balancer, args)
         elif args.command == 'memory':
-            return self._show_memory(args)
-        elif args.command == 'export':
-            return self._export_stats(args)
-        elif args.command == 'monitor':
-            return self._monitor_stats(args)
+            return self._show_memory(balancer, args)
+        elif args.command == 'import':
+            return self._import_keys(balancer, args)
+        elif args.command == 'add-key':
+            return self._add_key(balancer, args)
+        elif args.command == 'remove-key':
+            return self._remove_key(balancer, args)
         elif args.command == 'list':
-            return self._list_keys(args)
+            return self._list_keys(balancer, args)
+        elif args.command == 'import-history':
+            return self._show_import_history(balancer, args)
         elif args.command == 'reset':
-            return self._reset_keys(args)
+            return self._reset_keys(balancer, args)
+        elif args.command == 'cleanup':
+            return self._cleanup_keys(balancer, args)
+        elif args.command == 'monitor':
+            return self._monitor_keys(balancer, args)
         else:
             print(f"❌ Unknown command: {args.command}")
             return 1
     
-    def _show_stats(self, args: argparse.Namespace) -> int:
-        """Show comprehensive statistics."""
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            stats = balancer.get_stats()
-            db_info = balancer.get_database_info()
-            
-            if args.json:
-                import json
-                output = {
-                    'timestamp': datetime.now().isoformat(),
-                    'keys_file': args.keys_file,
-                    'database': args.db_path,
-                    'statistics': stats,
-                    'database_info': db_info
-                }
-                print(json.dumps(output, indent=2))
-            else:
-                self._print_stats_table(stats, db_info, args.detailed)
-            
-            return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to get statistics: {e}")
-            return 1
-    
-    def _show_health(self, args: argparse.Namespace) -> int:
-        """Show key health status."""
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            stats = balancer.get_stats()
-            
-            if args.json:
-                import json
-                output = {
-                    'timestamp': datetime.now().isoformat(),
-                    'filter': args.filter,
-                    'health_summary': {
-                        'total_keys': stats['total_keys'],
-                        'available_keys': stats['available_keys'],
-                        'unavailable_keys': stats['unavailable_keys'],
-                        'error_summary': stats.get('error_summary', {})
-                    }
-                }
-                print(json.dumps(output, indent=2))
-            else:
-                self._print_health_table(stats, args.filter)
-            
-            return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to get health status: {e}")
-            return 1
-    
-    def _show_db_info(self, args: argparse.Namespace) -> int:
-        """Show database information."""
-        try:
-            balancer = KeyBalancer(
-                keys_file='keys.txt',  # Use default for db-info
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            db_info = balancer.get_database_info()
-            
-            if args.json:
-                import json
-                output = {
-                    'timestamp': datetime.now().isoformat(),
-                    'database_info': db_info
-                }
-                print(json.dumps(output, indent=2))
-            else:
-                self._print_db_info_table(db_info)
-            
-            return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to get database info: {e}")
-            return 1
-    
-    def _show_memory(self, args: argparse.Namespace) -> int:
-        """Show memory usage statistics."""
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            memory_stats = balancer.get_memory_usage()
-            
-            if args.json:
-                import json
-                output = {
-                    'timestamp': datetime.now().isoformat(),
-                    'memory_usage': memory_stats
-                }
-                print(json.dumps(output, indent=2))
-            else:
-                self._print_memory_table(memory_stats)
-            
-            return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to get memory usage: {e}")
-            return 1
-    
-    def _export_stats(self, args: argparse.Namespace) -> int:
-        """Export statistics to file."""
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            stats = balancer.get_stats()
-            db_info = balancer.get_database_info()
-            memory_stats = balancer.get_memory_usage()
-            
-            data = {
-                'timestamp': datetime.now().isoformat(),
-                'keys_file': args.keys_file,
-                'database': args.db_path,
-                'statistics': stats,
-                'database_info': db_info,
-                'memory_usage': memory_stats
-            }
-            
-            if args.format == 'json':
-                import json
-                with open(args.output, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-            elif args.format == 'csv':
-                self._export_to_csv(data, args.output)
-            elif args.format == 'txt':
-                self._export_to_txt(data, args.output)
-            
-            print(f"✅ Statistics exported to {args.output}")
-            return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to export statistics: {e}")
-            return 1
-    
-    def _monitor_stats(self, args: argparse.Namespace) -> int:
-        """Monitor real-time statistics."""
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            import time
-            
-            count = 0
-            while True:
-                if args.count and count >= args.count:
-                    break
-                
-                # Clear screen
-                os.system('clear' if os.name == 'posix' else 'cls')
-                
-                print(f"🔄 Real-time Monitoring - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"📊 Keys file: {args.keys_file}")
-                print(f"🗄️  Database: {args.db_path}")
-                print("=" * 60)
-                
-                stats = balancer.get_stats()
-                db_info = balancer.get_database_info()
-                
-                self._print_monitor_table(stats, db_info)
-                
-                count += 1
-                if args.count and count >= args.count:
-                    break
-                
-                print(f"\n⏰ Next update in {args.interval} seconds... (Press Ctrl+C to stop)")
-                time.sleep(args.interval)
-            
-            return 0
-            
-        except KeyboardInterrupt:
-            print("\n🛑 Monitoring stopped")
-            return 0
-        except Exception as e:
-            print(f"❌ Failed to monitor statistics: {e}")
-            return 1
-    
-    def _list_keys(self, args: argparse.Namespace) -> int:
-        """List all keys."""
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            keys = balancer.key_manager.keys
-            
-            # Sort keys
-            if args.sort_by == 'weight':
-                keys = sorted(keys, key=lambda k: k.weight, reverse=True)
-            elif args.sort_by == 'last_used':
-                keys = sorted(keys, key=lambda k: k.last_used or datetime.min)
-            elif args.sort_by == 'error_count':
-                keys = sorted(keys, key=lambda k: k.error_count, reverse=True)
-            elif args.sort_by == 'status':
-                keys = sorted(keys, key=lambda k: k.is_available, reverse=True)
-            else:  # sort by key
-                keys = sorted(keys, key=lambda k: k.key)
-            
-            # Apply limit
-            if args.limit:
-                keys = keys[:args.limit]
-            
-            if args.json:
-                import json
-                output = {
-                    'timestamp': datetime.now().isoformat(),
-                    'sort_by': args.sort_by,
-                    'limit': args.limit,
-                    'total_keys': len(keys),
-                    'keys': [
-                        {
-                            'key': k.key[:20] + '...' if len(k.key) > 20 else k.key,
-                            'weight': k.weight,
-                            'available': k.is_available,
-                            'error_count': k.error_count,
-                            'last_used': k.last_used.isoformat() if k.last_used else None,
-                            'added_time': k.added_time.isoformat()
-                        }
-                        for k in keys
-                    ]
-                }
-                print(json.dumps(output, indent=2))
-            else:
-                self._print_keys_table(keys, args.sort_by)
-            
-            return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to list keys: {e}")
-            return 1
-    
-    def _reset_keys(self, args: argparse.Namespace) -> int:
-        """Reset key weights and status."""
-        if not args.confirm:
-            print("⚠️  This will reset all key weights and mark them as available.")
-            print("⚠️  Use --confirm to proceed.")
-            return 1
+    def _show_stats(self, balancer: KeyBalancer, args):
+        """显示统计信息"""
+        stats = balancer.get_stats()
         
-        try:
-            balancer = KeyBalancer(
-                keys_file=args.keys_file,
-                db_path=args.db_path,
-                auto_save=False
-            )
-            
-            balancer.reset_all_weights()
-            balancer.save_state_now()
-            
-            print("✅ All keys have been reset successfully!")
+        if args.json:
+            print(json.dumps(stats, indent=2, default=str))
             return 0
-            
-        except Exception as e:
-            print(f"❌ Failed to reset keys: {e}")
-            return 1
+        
+        print("📊 Key Statistics")
+        print("=" * 50)
+        print(f"Total Keys: {stats['total_keys']}")
+        print(f"Available Keys: {stats['available_keys']}")
+        print(f"Unavailable Keys: {stats['unavailable_keys']}")
+        print(f"Average Weight: {stats['average_weight']}")
+        print(f"Database Size: {stats['database_size_mb']:.2f} MB")
+        print(f"Last Save: {stats['last_save']}")
+        
+        if 'source_distribution' in stats:
+            print("\nSource Distribution:")
+            for source, count in stats['source_distribution'].items():
+                print(f"  {source}: {count}")
+        
+        cache_stats = stats.get('cache_stats', {})
+        if cache_stats:
+            print(f"\nCache Stats:")
+            print(f"  Size: {cache_stats['size']}/{cache_stats['capacity']}")
+            print(f"  Hit Rate: {cache_stats['hit_rate']:.2f}")
+            print(f"  Access Count: {cache_stats['access_count']}")
+        
+        return 0
     
-    def _print_stats_table(self, stats: Dict[str, Any], db_info: Dict[str, Any], detailed: bool = False):
-        """Print statistics in a formatted table."""
-        print("📊 COMPREHENSIVE STATISTICS")
-        print("=" * 60)
+    def _show_health(self, balancer: KeyBalancer, args):
+        """显示健康状态"""
+        stats = balancer.get_stats()
         
-        # Basic stats
-        print(f"🔑 Total Keys: {stats['total_keys']}")
-        print(f"✅ Available Keys: {stats['available_keys']}")
-        print(f"❌ Unavailable Keys: {stats['unavailable_keys']}")
-        print(f"⚖️  Average Weight: {stats.get('average_weight', 'N/A')}")
-        print(f"🗄️  Database Size: {db_info.get('database_size_mb', 'N/A')} MB")
+        if args.json:
+            print(json.dumps(stats, indent=2, default=str))
+            return 0
         
-        # Cache stats
-        if 'cache_stats' in stats:
-            cache = stats['cache_stats']
-            print(f"💾 Cache Capacity: {cache.get('capacity', 'N/A')}")
-            print(f"🎯 Cache Hit Rate: {cache.get('hit_rate', 'N/A'):.2%}")
-        
-        # Selection stats
-        if 'selection_count' in stats:
-            print(f"🔄 Total Selections: {stats['selection_count']}")
-        
-        if detailed and 'keys' in stats:
-            print("\n🔍 DETAILED KEY INFORMATION")
-            print("-" * 60)
-            for key_info in stats['keys'][:10]:  # Show first 10
-                status = "✅" if key_info['available'] else "❌"
-                print(f"{status} {key_info['key']}: weight={key_info['weight']}, errors={key_info['error_count']}")
-            if len(stats['keys']) > 10:
-                print(f"... and {len(stats['keys']) - 10} more keys")
-    
-    def _print_health_table(self, stats: Dict[str, Any], filter_type: str):
-        """Print health status table."""
-        print("🏥 KEY HEALTH STATUS")
-        print("=" * 60)
+        print("🏥 Key Health Status")
+        print("=" * 50)
         
         total = stats['total_keys']
         available = stats['available_keys']
         unavailable = stats['unavailable_keys']
         
-        print(f"🔑 Total Keys: {total}")
-        print(f"✅ Available: {available} ({available/total*100:.1f}%)")
-        print(f"❌ Unavailable: {unavailable} ({unavailable/total*100:.1f}%)")
+        if total == 0:
+            print("❌ No keys found in database")
+            return 1
         
-        if filter_type == 'error' and 'keys' in stats:
-            print("\n🚨 KEYS WITH ERRORS")
-            print("-" * 60)
-            error_keys = [k for k in stats['keys'] if k['error_count'] > 0]
-            for key_info in sorted(error_keys, key=lambda k: k['error_count'], reverse=True):
-                print(f"❌ {key_info['key']}: {key_info['error_count']} errors")
-    
-    def _print_db_info_table(self, db_info: Dict[str, Any]):
-        """Print database information table."""
-        print("🗄️  DATABASE INFORMATION")
-        print("=" * 60)
+        health_percentage = (available / total) * 100
+        print(f"Overall Health: {health_percentage:.1f}%")
+        print(f"Available: {available}/{total}")
+        print(f"Unavailable: {unavailable}/{total}")
         
-        print(f"📁 Database Path: {db_info.get('database_path', 'N/A')}")
-        print(f"💾 Database Size: {db_info.get('database_size_mb', 'N/A')} MB")
-        print(f"🔑 Total Keys in DB: {db_info.get('total_keys_in_db', 'N/A')}")
-        print(f"✅ Available Keys in DB: {db_info.get('available_keys_in_db', 'N/A')}")
-        print(f"⚖️  Average Weight: {db_info.get('average_weight', 'N/A')}")
-    
-    def _print_memory_table(self, memory_stats: Dict[str, Any]):
-        """Print memory usage table."""
-        print("💾 MEMORY USAGE STATISTICS")
-        print("=" * 60)
+        if health_percentage < 50:
+            print("🚨 Warning: Less than 50% of keys are available!")
+        elif health_percentage < 80:
+            print("⚠️  Notice: Some keys are unavailable")
+        else:
+            print("✅ Good: Most keys are available")
         
-        print(f"🔑 Total Keys: {memory_stats.get('total_keys', 'N/A')}")
-        print(f"💾 Total Memory: {memory_stats.get('total_memory_bytes', 0) / 1024:.2f} KB")
-        print(f"📏 Average Key Size: {memory_stats.get('average_key_size_bytes', 0):.1f} bytes")
-        print(f"🚀 Estimated 1000 Keys: {memory_stats.get('estimated_1000_keys_memory_mb', 0):.2f} MB")
-        print(f"🗄️  Database Size: {memory_stats.get('database_size_mb', 0):.2f} MB")
+        return 0
     
-    def _print_monitor_table(self, stats: Dict[str, Any], db_info: Dict[str, Any]):
-        """Print monitoring table."""
-        print(f"🔑 Keys: {stats['total_keys']} total, {stats['available_keys']} available")
-        print(f"⚖️  Avg Weight: {stats.get('average_weight', 'N/A')}")
-        print(f"🗄️  DB Size: {db_info.get('database_size_mb', 'N/A')} MB")
+    def _show_db_info(self, balancer: KeyBalancer, args):
+        """显示数据库信息"""
+        db_info = balancer.get_database_info()
         
-        if 'cache_stats' in stats:
-            cache = stats['cache_stats']
-            print(f"💾 Cache: {cache.get('hit_rate', 0):.2%} hit rate")
+        if args.json:
+            print(json.dumps(db_info, indent=2, default=str))
+            return 0
+        
+        print("🗄️  Database Information")
+        print("=" * 50)
+        print(f"Database Path: {db_info['database_path']}")
+        print(f"Database Size: {db_info['database_size_mb']:.2f} MB")
+        print(f"Total Keys: {db_info['total_keys_in_db']}")
+        print(f"Available Keys: {db_info['available_keys_in_db']}")
+        print(f"Average Weight: {db_info['average_weight']:.2f}")
+        
+        if 'source_distribution' in db_info:
+            print("\nSource Distribution:")
+            for source, count in db_info['source_distribution'].items():
+                print(f"  {source}: {count}")
+        
+        return 0
     
-    def _print_keys_table(self, keys: list, sort_by: str):
-        """Print keys table."""
-        print(f"🔑 KEYS LIST (sorted by {sort_by})")
+    def _show_memory(self, balancer: KeyBalancer, args):
+        """显示内存使用信息"""
+        memory_info = balancer.get_memory_usage()
+        
+        if args.json:
+            print(json.dumps(memory_info, indent=2, default=str))
+            return 0
+        
+        print("💾 Memory Usage")
+        print("=" * 50)
+        print(f"Total Keys: {memory_info['total_keys']}")
+        print(f"Total Memory: {memory_info['total_memory_bytes']} bytes")
+        print(f"Average Key Size: {memory_info['average_key_size_bytes']:.1f} bytes")
+        print(f"Estimated 1000 Keys: {memory_info['estimated_1000_keys_memory_mb']:.2f} MB")
+        print(f"Database Size: {memory_info['database_size_mb']:.2f} MB")
+        
+        return 0
+    
+    def _import_keys(self, balancer: KeyBalancer, args):
+        """导入 keys 文件"""
+        file_path = Path(args.file_path)
+        
+        if not file_path.exists():
+            print(f"❌ File not found: {file_path}")
+            return 1
+        
+        print(f"📥 Importing keys from: {file_path}")
+        print(f"Source: {args.source}")
+        
+        try:
+            result = balancer.import_keys_from_file(str(file_path), args.source)
+            
+            if args.json:
+                print(json.dumps(result, indent=2, default=str))
+                return 0
+            
+            print("\n📊 Import Results:")
+            print(f"Total Lines: {result['total_lines']}")
+            print(f"New Keys: {result['new_keys']}")
+            print(f"Updated Keys: {result['updated_keys']}")
+            print(f"Skipped Keys: {result['skipped_keys']}")
+            print(f"Source: {result['source']}")
+            
+            if result['new_keys'] > 0:
+                print(f"✅ Successfully imported {result['new_keys']} new keys")
+            else:
+                print("ℹ️  No new keys imported")
+            
+            return 0
+            
+        except Exception as e:
+            print(f"❌ Import failed: {e}")
+            return 1
+    
+    def _add_key(self, balancer: KeyBalancer, args):
+        """添加单个 key"""
+        print(f"➕ Adding key: {args.key_value[:20]}...")
+        print(f"Weight: {args.weight}")
+        print(f"Source: {args.source}")
+        
+        try:
+            success = balancer.add_key(args.key_value, args.weight, args.source)
+            
+            if success:
+                print("✅ Key added successfully")
+                return 0
+            else:
+                print("❌ Key already exists")
+                return 1
+                
+        except Exception as e:
+            print(f"❌ Failed to add key: {e}")
+            return 1
+    
+    def _remove_key(self, balancer: KeyBalancer, args):
+        """移除 key"""
+        print(f"🗑️  Removing key: {args.key_value[:20]}...")
+        
+        try:
+            success = balancer.remove_key(args.key_value)
+            
+            if success:
+                print("✅ Key removed successfully")
+                return 0
+            else:
+                print("❌ Key not found")
+                return 1
+                
+        except Exception as e:
+            print(f"❌ Failed to remove key: {e}")
+            return 1
+    
+    def _list_keys(self, balancer: KeyBalancer, args):
+        """列出所有 keys"""
+        stats = balancer.get_stats()
+        keys = stats['keys']
+        
+        if args.available_only:
+            keys = [k for k in keys if k['available']]
+            print(f"🔑 Available Keys ({len(keys)}):")
+        else:
+            print(f"🔑 All Keys ({len(keys)}):")
+        
         print("=" * 80)
-        print(f"{'Key':<30} {'Weight':<8} {'Status':<10} {'Errors':<8} {'Last Used':<20}")
-        print("-" * 80)
         
-        for key in keys:
-            key_display = key.key[:27] + '...' if len(key.key) > 30 else key.key
-            status = "✅ Available" if key.is_available else "❌ Unavailable"
-            last_used = key.last_used.strftime('%Y-%m-%d %H:%M') if key.last_used else 'Never'
+        if args.by_source:
+            # 按来源分组
+            source_groups = {}
+            for key in keys:
+                source = key.get('source', 'unknown')
+                if source not in source_groups:
+                    source_groups[source] = []
+                source_groups[source].append(key)
             
-            print(f"{key_display:<30} {key.weight:<8.2f} {status:<10} {key.error_count:<8} {last_used:<20}")
-    
-    def _export_to_csv(self, data: Dict[str, Any], output_path: str):
-        """Export data to CSV format."""
-        import csv
+            for source, source_keys in source_groups.items():
+                print(f"\n📁 Source: {source} ({len(source_keys)} keys)")
+                print("-" * 40)
+                for key in source_keys:
+                    self._print_key_info(key)
+        else:
+            # 按可用性排序
+            keys.sort(key=lambda x: (not x['available'], x['weight']), reverse=True)
+            for key in keys:
+                self._print_key_info(key)
         
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            
-            # Write basic info
-            writer.writerow(['Timestamp', data['timestamp']])
-            writer.writerow(['Keys File', data['keys_file']])
-            writer.writerow(['Database', data['database']])
-            writer.writerow([])
-            
-            # Write statistics
-            writer.writerow(['STATISTICS'])
-            for key, value in data['statistics'].items():
-                if isinstance(value, (int, float, str)):
-                    writer.writerow([key, value])
-            
-            writer.writerow([])
-            
-            # Write database info
-            writer.writerow(['DATABASE INFO'])
-            for key, value in data['database_info'].items():
-                writer.writerow([key, value])
+        return 0
     
-    def _export_to_txt(self, data: Dict[str, Any], output_path: str):
-        """Export data to text format."""
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("EASY GEMINI BALANCE - STATISTICS EXPORT\n")
-            f.write("=" * 50 + "\n\n")
-            
-            f.write(f"Timestamp: {data['timestamp']}\n")
-            f.write(f"Keys File: {data['keys_file']}\n")
-            f.write(f"Database: {data['database']}\n\n")
-            
-            f.write("STATISTICS:\n")
-            f.write("-" * 20 + "\n")
-            for key, value in data['statistics'].items():
-                if isinstance(value, (int, float, str)):
-                    f.write(f"{key}: {value}\n")
-            
-            f.write("\nDATABASE INFO:\n")
-            f.write("-" * 20 + "\n")
-            for key, value in data['database_info'].items():
-                f.write(f"{key}: {value}\n")
+    def _print_key_info(self, key: dict):
+        """打印单个 key 信息"""
+        status = "✅" if key['available'] else "❌"
+        print(f"{status} {key['key']} | Weight: {key['weight']} | "
+              f"Errors: {key['error_count']} | Source: {key.get('source', 'unknown')}")
+    
+    def _show_import_history(self, balancer: KeyBalancer, args):
+        """显示导入历史"""
+        history = balancer.get_import_history()
+        
+        if args.json:
+            print(json.dumps(history, indent=2, default=str))
+            return 0
+        
+        if not history:
+            print("📚 No import history found")
+            return 0
+        
+        print("📚 Import History")
+        print("=" * 80)
+        
+        for record in history:
+            print(f"📁 File: {record['source_file']}")
+            print(f"⏰ Time: {record['import_time']}")
+            print(f"📊 Stats: {record['keys_count']} total, "
+                  f"{record['new_keys']} new, {record['updated_keys']} updated, "
+                  f"{record['skipped_keys']} skipped")
+            print("-" * 40)
+        
+        return 0
+    
+    def _reset_keys(self, balancer: KeyBalancer, args):
+        """重置 key 权重和健康状态"""
+        if not args.confirm:
+            print("⚠️  This will reset all key weights and health status!")
+            print("Use --confirm to proceed")
+            return 1
+        
+        print("🔄 Resetting all key weights and health status...")
+        
+        try:
+            balancer.reset_all_weights()
+            print("✅ All keys have been reset")
+            return 0
+        except Exception as e:
+            print(f"❌ Reset failed: {e}")
+            return 1
+    
+    def _cleanup_keys(self, balancer: KeyBalancer, args):
+        """清理旧的未使用的 keys"""
+        if not args.confirm:
+            print(f"⚠️  This will remove keys unused for {args.days} days!")
+            print("Use --confirm to proceed")
+            return 1
+        
+        print(f"🧹 Cleaning up keys unused for {args.days} days...")
+        
+        try:
+            removed_count = balancer.cleanup_old_keys(args.days)
+            print(f"✅ Cleanup completed: {removed_count} keys removed")
+            return 0
+        except Exception as e:
+            print(f"❌ Cleanup failed: {e}")
+            return 1
+    
+    def _monitor_keys(self, balancer: KeyBalancer, args):
+        """实时监控 key 使用情况"""
+        print(f"📊 Monitoring key usage (update every {args.interval}s)")
+        print("Press Ctrl+C to stop")
+        print("=" * 60)
+        
+        try:
+            while True:
+                stats = balancer.get_stats()
+                available = stats['available_keys']
+                total = stats['total_keys']
+                health = (available / total * 100) if total > 0 else 0
+                
+                print(f"\r🔄 Health: {health:.1f}% | Available: {available}/{total} | "
+                      f"Cache: {stats['cache_stats']['size']}/{stats['cache_stats']['capacity']}", end='')
+                
+                import time
+                time.sleep(args.interval)
+                
+        except KeyboardInterrupt:
+            print("\n\n✅ Monitoring stopped")
+            return 0
 
 
 def main():
-    """Main entry point for the CLI."""
+    """主函数"""
     cli = EasyGeminiCLI()
-    sys.exit(cli.run())
+    return cli.run()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,11 +1,12 @@
 """
-Key Balancer with LRU caching and weight-based selection.
+Key Balancer with LRU caching and weight-based selection using SSOT pattern.
+All data is stored in and retrieved from SQLite database.
 """
 
 import random
 import time
 import functools
-from typing import List, Optional, Tuple, Callable, Any
+from typing import List, Optional, Tuple, Callable, Any, Dict
 from collections import OrderedDict
 from contextlib import contextmanager
 from .key_manager import KeyManager, APIKey
@@ -80,7 +81,7 @@ class KeyContext:
 class KeyBalancer:
     """
     Main key balancer that provides LRU caching and weight-based key selection.
-    Optimized for large key sets (1000+ keys) with SQLite persistence.
+    Optimized for large key sets (1000+ keys) with SQLite persistence using SSOT pattern.
     
     Now supports three improvement schemes:
     1. Auto-success mode: automatically mark keys as successful when retrieved
@@ -88,15 +89,14 @@ class KeyBalancer:
     3. Decorator pattern: automatic key health management with decorators
     """
     
-    def __init__(self, keys_file: str = "keys.txt", cache_size: int = 100, 
-                 db_path: str = "keys.db", auto_save: bool = True, auto_success: bool = True):
+    def __init__(self, cache_size: int = 100, db_path: Optional[str] = None, 
+                 auto_save: bool = True, auto_success: bool = True):
         """
         Initialize the key balancer.
         
         Args:
-            keys_file: Path to the text file containing API keys
             cache_size: Size of the LRU cache for recently used keys
-            db_path: Path to the SQLite database for persisting key states
+            db_path: Path to the SQLite database (defaults to XDG_DATA_HOME)
             auto_save: Whether to automatically save state periodically
             auto_success: Whether to automatically mark keys as successful when retrieved
         """
@@ -105,7 +105,6 @@ class KeyBalancer:
             cache_size = max(100, cache_size)
         
         self.key_manager = KeyManager(
-            keys_file=keys_file, 
             db_path=db_path,
             auto_save=auto_save
         )
@@ -373,8 +372,8 @@ class KeyBalancer:
         return stats
     
     def reload_keys(self):
-        """Reload keys from the file."""
-        self.key_manager.reload_keys()
+        """Reload keys from database."""
+        self.key_manager._load_from_database()
         self.lru_cache.clear()
         self._update_weight_distribution()
     
@@ -408,6 +407,7 @@ class KeyBalancer:
             'last_error': key.last_error.isoformat() if key.last_error else None,
             'in_cache': key.key in self.lru_cache.cache,
             'added_time': key.added_time.isoformat(),
+            'source': key.source,
         }
     
     def save_state_now(self):
@@ -486,5 +486,61 @@ class KeyBalancer:
             'total_keys_in_db': stats.get('total_keys', 0),
             'available_keys_in_db': stats.get('available_keys', 0),
             'average_weight': stats.get('average_weight', 0),
+            'source_distribution': stats.get('source_distribution', {}),
         }
+    
+    # 新增：导入功能
+    def import_keys_from_file(self, file_path: str, source: str = "imported") -> Dict:
+        """
+        Import keys from a text file into database.
+        
+        Args:
+            file_path: Path to the text file containing API keys
+            source: Source identifier for imported keys
+            
+        Returns:
+            Dictionary with import statistics
+        """
+        result = self.key_manager.import_keys_from_file(file_path, source)
+        
+        # 重新加载并更新权重分布
+        self.reload_keys()
+        
+        return result
+    
+    def add_key(self, key_value: str, weight: float = 1.0, source: str = "manual") -> bool:
+        """
+        Add a new key manually.
+        
+        Args:
+            key_value: The API key string
+            weight: Key weight
+            source: Source identifier
+            
+        Returns:
+            True if added successfully, False if key already exists
+        """
+        success = self.key_manager.add_key(key_value, weight, source)
+        if success:
+            self.reload_keys()
+        return success
+    
+    def remove_key(self, key_value: str) -> bool:
+        """
+        Remove a key.
+        
+        Args:
+            key_value: The API key string
+            
+        Returns:
+            True if removed successfully, False if not found
+        """
+        success = self.key_manager.remove_key(key_value)
+        if success:
+            self.reload_keys()
+        return success
+    
+    def get_import_history(self) -> List[Dict]:
+        """Get import history."""
+        return self.key_manager.get_import_history()
 

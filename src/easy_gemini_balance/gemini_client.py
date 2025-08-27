@@ -2,6 +2,7 @@
 """
 Google Gemini API 客户端封装
 提供自动重试、key 管理和错误处理功能
+使用 SSOT 模式，所有数据从数据库获取
 """
 
 import time
@@ -24,6 +25,7 @@ class GeminiClientWrapper:
     """
     Google Gemini API 客户端包装器
     自动管理 API key 和重试逻辑
+    使用 SSOT 模式，所有数据从数据库获取
     """
     
     def __init__(
@@ -223,12 +225,55 @@ class GeminiClientWrapper:
     def get_current_key(self) -> Optional[str]:
         """获取当前 API key（如果存在）"""
         return self._current_key
+    
+    # 新增：导入功能
+    def import_keys_from_file(self, file_path: str, source: str = "imported") -> dict:
+        """
+        从文件导入 API keys 到数据库
+        
+        Args:
+            file_path: 包含 API keys 的文本文件路径
+            source: 导入来源标识
+            
+        Returns:
+            导入统计信息字典
+        """
+        return self.balancer.import_keys_from_file(file_path, source)
+    
+    def add_key(self, key_value: str, weight: float = 1.0, source: str = "manual") -> bool:
+        """
+        手动添加新的 API key
+        
+        Args:
+            key_value: API key 字符串
+            weight: key 权重
+            source: 来源标识
+            
+        Returns:
+            添加成功返回 True，key 已存在返回 False
+        """
+        return self.balancer.add_key(key_value, weight, source)
+    
+    def remove_key(self, key_value: str) -> bool:
+        """
+        移除 API key
+        
+        Args:
+            key_value: API key 字符串
+            
+        Returns:
+            移除成功返回 True，key 不存在返回 False
+        """
+        return self.balancer.remove_key(key_value)
+    
+    def get_import_history(self) -> List[dict]:
+        """获取导入历史"""
+        return self.balancer.get_import_history()
 
 
 # 便捷函数
 def create_gemini_wrapper(
-    keys_file: str,
-    db_path: str,
+    db_path: Optional[str] = None,
     max_retries: int = 3,
     retry_delay: float = 1.0,
     backoff_factor: float = 2.0,
@@ -238,8 +283,7 @@ def create_gemini_wrapper(
     创建 Gemini 客户端包装器的便捷函数
     
     Args:
-        keys_file: API keys 文件路径
-        db_path: 数据库文件路径
+        db_path: 数据库文件路径（默认为 XDG_DATA_HOME）
         max_retries: 最大重试次数
         retry_delay: 初始重试延迟
         backoff_factor: 重试延迟的指数退避因子
@@ -248,7 +292,7 @@ def create_gemini_wrapper(
     Returns:
         GeminiClientWrapper 实例
     """
-    balancer = KeyBalancer(keys_file=keys_file, db_path=db_path, **balancer_kwargs)
+    balancer = KeyBalancer(db_path=db_path, **balancer_kwargs)
     return GeminiClientWrapper(
         balancer=balancer,
         max_retries=max_retries,
