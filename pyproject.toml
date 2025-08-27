@@ -1,0 +1,87 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "easy-gemini-balance"
+version = "0.3.0"
+description = "A Python module for dynamic API key balancing with LRU caching, weight management, and SQLite persistence"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+keywords = ["api", "key", "balancing", "load-balancer", "lru", "cache", "sqlite", "gemini"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+    "requests>=2.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+    "black>=21.0",
+    "flake8>=3.8",
+]
+test = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+]
+docs = [
+    "sphinx>=4.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+]
+
+[project.scripts]
+easy-gemini-balance = "easy_gemini_balance.cli:main"
+easy-gemini = "easy_gemini_balance.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/easy-gemini-balance"
+Repository = "https://github.com/yourusername/easy-gemini-balance.git"
+Documentation = "https://github.com/yourusername/easy-gemini-balance#readme"
+Issues = "https://github.com/yourusername/easy-gemini-balance/issues"
+Changelog = "https://github.com/yourusername/easy-gemini-balance/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/easy_gemini_balance"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/INSTALL.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=src/easy_gemini_balance"
+
+[dependency-groups]
+dev = [
+    "build>=1.2.2.post1",
+]

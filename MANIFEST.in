@@ -1,0 +1,31 @@
+# Include source code
+recursive-include src *.py
+
+# Include tests
+recursive-include tests *.py
+
+# Include documentation
+include README.md
+include INSTALL.md
+include LICENSE
+include CHANGELOG.md
+
+# Include project configuration
+include pyproject.toml
+include MANIFEST.in
+
+# Include example files
+include example.py
+
+# Exclude unnecessary files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .git*
+global-exclude .DS_Store
+global-exclude *.db
+global-exclude *.log
+global-exclude .pytest_cache
+global-exclude .coverage
+global-exclude htmlcov
