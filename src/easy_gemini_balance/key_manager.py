@@ -667,6 +667,7 @@ class KeyManager:
         save_thread = threading.Thread(target=auto_save_worker, daemon=True)
         save_thread.start()
     
+    # 核心数据库操作方法
     def import_keys_from_file(self, file_path: str, source: str = "imported") -> Dict:
         """
         Import keys from a text file into database.

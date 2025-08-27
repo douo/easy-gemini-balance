@@ -489,58 +489,20 @@ class KeyBalancer:
             'source_distribution': stats.get('source_distribution', {}),
         }
     
-    # 新增：导入功能
+    # 通过 key_manager 访问数据库功能（不重复实现）
     def import_keys_from_file(self, file_path: str, source: str = "imported") -> Dict:
-        """
-        Import keys from a text file into database.
-        
-        Args:
-            file_path: Path to the text file containing API keys
-            source: Source identifier for imported keys
-            
-        Returns:
-            Dictionary with import statistics
-        """
-        result = self.key_manager.import_keys_from_file(file_path, source)
-        
-        # 重新加载并更新权重分布
-        self.reload_keys()
-        
-        return result
+        """Import keys from file via key_manager."""
+        return self.key_manager.import_keys_from_file(file_path, source)
     
     def add_key(self, key_value: str, weight: float = 1.0, source: str = "manual") -> bool:
-        """
-        Add a new key manually.
-        
-        Args:
-            key_value: The API key string
-            weight: Key weight
-            source: Source identifier
-            
-        Returns:
-            True if added successfully, False if key already exists
-        """
-        success = self.key_manager.add_key(key_value, weight, source)
-        if success:
-            self.reload_keys()
-        return success
+        """Add key via key_manager."""
+        return self.key_manager.add_key(key_value, weight, source)
     
     def remove_key(self, key_value: str) -> bool:
-        """
-        Remove a key.
-        
-        Args:
-            key_value: The API key string
-            
-        Returns:
-            True if removed successfully, False if not found
-        """
-        success = self.key_manager.remove_key(key_value)
-        if success:
-            self.reload_keys()
-        return success
+        """Remove key via key_manager."""
+        return self.key_manager.remove_key(key_value)
     
     def get_import_history(self) -> List[Dict]:
-        """Get import history."""
+        """Get import history via key_manager."""
         return self.key_manager.get_import_history()
 
