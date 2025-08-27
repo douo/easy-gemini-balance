@@ -79,6 +79,49 @@ def my_function(client, prompt):
 result = my_function("Hello")
 ```
 
+### 3. 直接使用 KeyBalancer
+
+如果你不想使用 Gemini 客户端包装器，可以直接使用 `KeyBalancer` 来管理 API keys：
+
+```python
+from easy_gemini_balance import KeyBalancer
+
+# 创建 balancer 实例
+balancer = KeyBalancer(
+    cache_size=100,        # LRU 缓存大小
+    auto_save=True,        # 自动保存状态
+    auto_success=True      # 自动标记成功
+)
+
+# 添加 keys
+balancer.add_key("your_api_key_1", weight=2.0, source="production")
+balancer.add_key("your_api_key_2", weight=1.5, source="development")
+
+# 获取单个 key
+api_key = balancer.get_single_key()
+
+# 获取多个 keys
+keys = balancer.get_keys(count=5)
+
+# 批量获取不同大小的 key 组
+batch_sizes = [10, 20, 30]
+key_batches = balancer.batch_get_keys(batch_sizes)
+
+# 使用上下文管理器自动管理 key 健康状态
+with balancer.get_key_context(count=3) as keys:
+    # 使用 keys 进行 API 调用
+    for key in keys:
+        # 你的 API 调用逻辑
+        pass
+    # 退出时自动标记为成功
+
+# 使用装饰器自动管理 key 健康状态
+@balancer.with_key_balancing(key_count=2)
+def my_api_function():
+    # 你的 API 调用逻辑
+    return "API result"
+```
+
 ### 4. 批量导入 Keys
 
 ```python
@@ -155,6 +198,32 @@ wrapper.add_key("normal_key", weight=1.0)
 
 # 备用 Key
 wrapper.add_key("backup_key", weight=0.5)
+```
+
+### KeyBalancer 高级配置
+
+```python
+# 针对大量 keys 的优化配置
+balancer = KeyBalancer(
+    cache_size=500,        # 预期 5000 个 keys
+    auto_save=True,        # 自动保存状态
+    auto_success=True      # 自动标记成功
+)
+
+# 性能优化配置
+balancer.optimize_for_large_keysets(5000)  # 预期 5000 个 keys
+
+# 批量操作优化
+batch_sizes = [10, 20, 30]  # 不同批次大小
+key_batches = balancer.batch_get_keys(batch_sizes)
+
+# 预计算权重分布以提高选择速度
+balancer._update_weight_distribution()
+
+# 监控缓存性能
+stats = balancer.get_stats()
+print(f"缓存命中率: {stats['cache_stats']['hit_rate']:.2f}")
+print(f"缓存大小: {stats['cache_stats']['size']}/{stats['cache_stats']['capacity']}")
 ```
 
 ### LRU 缓存配置
@@ -240,6 +309,12 @@ balancer.optimize_for_large_keysets(5000)  # 预期 5000 个 keys
 - **小规模**（< 100 keys）：缓存大小 = 100
 - **中等规模**（100-1000 keys）：缓存大小 = key 数量的 10%
 - **大规模**（> 1000 keys）：缓存大小 = 1000
+
+**直接使用 KeyBalancer 的优势**：
+- **更灵活的控制**：可以精确控制 key 的获取时机和数量
+- **更好的性能**：避免额外的客户端包装层
+- **自定义逻辑**：可以实现自己的重试和错误处理逻辑
+- **批量操作**：支持高效的批量 key 获取
 
 ### 权重分配系统
 
