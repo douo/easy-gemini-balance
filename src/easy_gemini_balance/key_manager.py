@@ -111,41 +111,76 @@ class SQLiteKeyStore:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # 创建keys表，key字段设置为UNIQUE约束
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS api_keys (
-                    key TEXT PRIMARY KEY,
-                    weight REAL DEFAULT 1.0,
-                    is_available INTEGER DEFAULT 1,
-                    error_count INTEGER DEFAULT 0,
-                    consecutive_errors INTEGER DEFAULT 0,
-                    last_used TEXT,
-                    last_error TEXT,
-                    added_time TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_time TEXT DEFAULT CURRENT_TIMESTAMP,
-                    source TEXT DEFAULT 'database'
-                )
-            ''')
+            # 检查表是否存在
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='api_keys'")
+            table_exists = cursor.fetchone() is not None
             
-            # 创建索引以提高查询性能
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_available ON api_keys(is_available)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_weight ON api_keys(weight)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_last_used ON api_keys(last_used)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_error_count ON api_keys(error_count)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_source ON api_keys(source)')
+            if not table_exists:
+                # 创建新表
+                cursor.execute('''
+                    CREATE TABLE api_keys (
+                        key TEXT PRIMARY KEY,
+                        weight REAL DEFAULT 1.0,
+                        is_available INTEGER DEFAULT 1,
+                        error_count INTEGER DEFAULT 0,
+                        consecutive_errors INTEGER DEFAULT 0,
+                        last_used TEXT,
+                        last_error TEXT,
+                        added_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                        source TEXT DEFAULT 'database'
+                    )
+                ''')
+                
+                # 创建索引以提高查询性能
+                cursor.execute('CREATE INDEX idx_available ON api_keys(is_available)')
+                cursor.execute('CREATE INDEX idx_weight ON api_keys(weight)')
+                cursor.execute('CREATE INDEX idx_last_used ON api_keys(last_used)')
+                cursor.execute('CREATE INDEX idx_error_count ON api_keys(error_count)')
+                cursor.execute('CREATE INDEX idx_source ON api_keys(source)')
+            else:
+                # 表已存在，检查是否需要添加 source 列
+                cursor.execute("PRAGMA table_info(api_keys)")
+                columns = [column[1] for column in cursor.fetchall()]
+                
+                if 'source' not in columns:
+                    # 添加 source 列
+                    cursor.execute('ALTER TABLE api_keys ADD COLUMN source TEXT DEFAULT "database"')
+                    print("🔄 Added 'source' column to existing database")
+                
+                # 创建缺失的索引（如果不存在）
+                existing_indexes = []
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='api_keys'")
+                for index in cursor.fetchall():
+                    existing_indexes.append(index[0])
+                
+                if 'idx_available' not in existing_indexes:
+                    cursor.execute('CREATE INDEX idx_available ON api_keys(is_available)')
+                if 'idx_weight' not in existing_indexes:
+                    cursor.execute('CREATE INDEX idx_weight ON api_keys(weight)')
+                if 'idx_last_used' not in existing_indexes:
+                    cursor.execute('CREATE INDEX idx_last_used ON api_keys(last_used)')
+                if 'idx_error_count' not in existing_indexes:
+                    cursor.execute('CREATE INDEX idx_error_count ON api_keys(error_count)')
+                if 'idx_source' not in existing_indexes:
+                    cursor.execute('CREATE INDEX idx_source ON api_keys(source)')
             
             # 创建导入历史表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS import_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_file TEXT NOT NULL,
-                    import_time TEXT DEFAULT CURRENT_TIMESTAMP,
-                    keys_count INTEGER DEFAULT 0,
-                    new_keys INTEGER DEFAULT 0,
-                    updated_keys INTEGER DEFAULT 0,
-                    skipped_keys INTEGER DEFAULT 0
-                )
-            ''')
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='import_history'")
+            history_table_exists = cursor.fetchone() is not None
+            
+            if not history_table_exists:
+                cursor.execute('''
+                    CREATE TABLE import_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_file TEXT NOT NULL,
+                        import_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                        keys_count INTEGER DEFAULT 0,
+                        new_keys INTEGER DEFAULT 0,
+                        updated_keys INTEGER DEFAULT 0,
+                        skipped_keys INTEGER DEFAULT 0
+                    )
+                ''')
             
             conn.commit()
             conn.close()

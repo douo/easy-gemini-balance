@@ -43,8 +43,7 @@ class TestGeminiClientWrapper:
         self.wrapper = GeminiClientWrapper(
             balancer=self.balancer,
             max_retries=2,
-            retry_delay=0.1,
-            backoff_factor=2.0
+            retry_delay=0.1
         )
     
     def teardown_method(self):
@@ -61,7 +60,6 @@ class TestGeminiClientWrapper:
         assert self.wrapper.balancer == self.balancer
         assert self.wrapper.max_retries == 2
         assert self.wrapper.retry_delay == 0.1
-        assert self.wrapper.backoff_factor == 2.0
         assert self.wrapper._current_client is None
         assert self.wrapper._current_key is None
     
@@ -186,14 +184,12 @@ class TestCreateGeminiWrapper:
                     keys_file=keys_file,
                     db_path=db_path,
                     max_retries=5,
-                    retry_delay=2.0,
-                    backoff_factor=3.0
+                    retry_delay=2.0
                 )
                 
                 assert isinstance(wrapper, GeminiClientWrapper)
                 assert wrapper.max_retries == 5
                 assert wrapper.retry_delay == 2.0
-                assert wrapper.backoff_factor == 3.0
                 assert wrapper.balancer is not None
 
 

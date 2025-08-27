@@ -8,7 +8,6 @@ Google Gemini API 客户端封装
 import time
 import functools
 from typing import Callable, Any, Optional, Union, List
-from contextlib import contextmanager
 
 try:
     from google import genai
@@ -32,8 +31,7 @@ class GeminiClientWrapper:
         self,
         balancer: KeyBalancer,
         max_retries: int = 3,
-        retry_delay: float = 1.0,
-        backoff_factor: float = 2.0
+        retry_delay: float = 1.0
     ):
         """
         初始化 Gemini 客户端包装器
@@ -41,8 +39,7 @@ class GeminiClientWrapper:
         Args:
             balancer: KeyBalancer 实例，用于管理 API keys
             max_retries: 最大重试次数
-            retry_delay: 初始重试延迟（秒）
-            backoff_factor: 重试延迟的指数退避因子
+            retry_delay: 重试延迟（秒）
         """
         if not GEMINI_AVAILABLE:
             raise ImportError("google-genai package is required. Install with: pip install google-genai")
@@ -50,7 +47,6 @@ class GeminiClientWrapper:
         self.balancer = balancer
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.backoff_factor = backoff_factor
         self._current_client = None
         self._current_key = None
     
@@ -67,12 +63,15 @@ class GeminiClientWrapper:
     def _handle_error(self, api_key: str, error: Exception, attempt: int):
         """处理错误，更新 key 健康状态"""
         error_code = self._extract_error_code(error)
+        print(f"🔑 当前使用的 key: {api_key[:20]}...")
+        print(f"❌ 错误详情: {error}")
+        print(f"📊 错误代码: {error_code}")
+        
         self.balancer.update_key_health(api_key, error_code=error_code)
         
         if attempt < self.max_retries:
-            delay = self.retry_delay * (self.backoff_factor ** attempt)
-            print(f"⚠️  API 调用失败 (尝试 {attempt + 1}/{self.max_retries})，等待 {delay:.1f} 秒后重试...")
-            time.sleep(delay)
+            print(f"⚠️  API 调用失败 (尝试 {attempt + 1}/{self.max_retries})，等待 {self.retry_delay} 秒后重试...")
+            time.sleep(self.retry_delay)
     
     def _extract_error_code(self, error: Exception) -> int:
         """从异常中提取错误代码"""
@@ -101,7 +100,7 @@ class GeminiClientWrapper:
     
     def execute_with_retry(
         self,
-        operation: Callable[[genai.Client], Any],
+        operation: Callable[["genai.Client"], Any],
         *args,
         **kwargs
     ) -> Any:
@@ -121,11 +120,14 @@ class GeminiClientWrapper:
         last_error = None
         
         for attempt in range(self.max_retries + 1):
+            api_key = None
             try:
                 # 获取新的客户端
                 api_key, client = self._get_new_client()
                 self._current_key = api_key
                 self._current_client = client
+                
+                print(f"🔑 尝试使用 key: {api_key[:20]}... (尝试 {attempt + 1}/{self.max_retries + 1})")
                 
                 # 执行操作
                 result = operation(client, *args, **kwargs)
@@ -139,39 +141,18 @@ class GeminiClientWrapper:
                 
                 if attempt < self.max_retries:
                     # 处理错误并准备重试
-                    self._handle_error(api_key, e, attempt)
+                    if api_key:
+                        self._handle_error(api_key, e, attempt)
                 else:
                     # 最后一次尝试失败
                     print(f"❌ 所有重试都失败了，最后错误: {e}")
-                    self._handle_error(api_key, e, attempt)
+                    if api_key:
+                        self._handle_error(api_key, e, attempt)
         
         # 所有重试都失败
         raise last_error
     
-    @contextmanager
-    def client_context(self):
-        """
-        上下文管理器，提供可重用的客户端
-        
-        使用方式:
-        with wrapper.client_context() as client:
-            result = client.generate_content("Hello")
-        """
-        try:
-            api_key, client = self._get_new_client()
-            self._current_key = api_key
-            self._current_client = client
-            
-            yield client
-            
-            # 成功完成，标记 key 为健康
-            self.balancer._mark_key_success(api_key)
-            
-        except Exception as e:
-            # 发生异常，更新 key 健康状态
-            if self._current_key:
-                self._handle_error(self._current_key, e, 0)
-            raise
+
     
     def with_retry(self, max_retries: Optional[int] = None):
         """
@@ -186,39 +167,50 @@ class GeminiClientWrapper:
         def decorator(func: Callable) -> Callable:
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
-                # 从函数参数中提取 client 参数
-                # 假设函数签名为 func(client, *args, **kwargs)
-                if args and hasattr(args[0], 'generate_content'):
-                    # 第一个参数是 client，直接调用
-                    return func(*args, **kwargs)
-                else:
-                    # 需要创建新的 client
-                    retry_count = max_retries if max_retries is not None else self.max_retries
-                    
-                    for attempt in range(retry_count + 1):
-                        try:
+                retry_count = max_retries if max_retries is not None else self.max_retries
+                
+                last_error = None
+                for attempt in range(retry_count + 1):
+                    api_key = None
+                    try:
+                        # 检查是否已经传入了 client 参数
+                        if args and hasattr(args[0], 'generate_content'):
+                            # 使用传入的 client
+                            client = args[0]
+                            api_key = getattr(client, '_api_key', None)  # 尝试获取关联的 API key
+                        else:
+                            # 创建新的 client
                             api_key, client = self._get_new_client()
                             self._current_key = api_key
                             self._current_client = client
-                            
+                        
+                        # 调用函数
+                        if args and hasattr(args[0], 'generate_content'):
+                            # 直接调用，不改变参数
+                            result = func(*args, **kwargs)
+                        else:
                             # 将 client 作为第一个参数调用函数
                             result = func(client, *args, **kwargs)
-                            
-                            # 成功时标记 key 为健康
+                        
+                        # 成功时标记 key 为健康
+                        if api_key:
                             self.balancer._mark_key_success(api_key)
-                            return result
-                            
-                        except Exception as e:
-                            if attempt < retry_count:
+                        return result
+                        
+                    except Exception as e:
+                        last_error = e
+                        if attempt < retry_count:
+                            if api_key:
                                 self._handle_error(api_key, e, attempt)
-                            else:
-                                print(f"❌ 所有重试都失败了，最后错误: {e}")
+                        else:
+                            print(f"❌ 所有重试都失败了，最后错误: {e}")
+                            if api_key:
                                 self._handle_error(api_key, e, attempt)
-                                raise
+                            raise last_error
             return wrapper
         return decorator
     
-    def get_current_client(self) -> Optional[genai.Client]:
+    def get_current_client(self) -> Optional["genai.Client"]:
         """获取当前客户端（如果存在）"""
         return self._current_client
     
@@ -247,9 +239,9 @@ class GeminiClientWrapper:
 # 便捷函数
 def create_gemini_wrapper(
     db_path: Optional[str] = None,
+    balancer: Optional[KeyBalancer] = None,
     max_retries: int = 3,
     retry_delay: float = 1.0,
-    backoff_factor: float = 2.0,
     **balancer_kwargs
 ) -> GeminiClientWrapper:
     """
@@ -257,18 +249,19 @@ def create_gemini_wrapper(
     
     Args:
         db_path: 数据库文件路径（默认为 XDG_DATA_HOME）
+        balancer: 现有的 KeyBalancer 实例，如果为 None 则创建新的
         max_retries: 最大重试次数
-        retry_delay: 初始重试延迟
-        backoff_factor: 重试延迟的指数退避因子
+        retry_delay: 重试延迟
         **balancer_kwargs: 传递给 KeyBalancer 的其他参数
     
     Returns:
         GeminiClientWrapper 实例
     """
-    balancer = KeyBalancer(db_path=db_path, **balancer_kwargs)
+    if balancer is None:
+        balancer = KeyBalancer(db_path=db_path, **balancer_kwargs)
+    
     return GeminiClientWrapper(
         balancer=balancer,
         max_retries=max_retries,
-        retry_delay=retry_delay,
-        backoff_factor=backoff_factor
+        retry_delay=retry_delay
     )

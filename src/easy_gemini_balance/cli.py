@@ -198,6 +198,30 @@ Examples:
             help='Update interval in seconds (default: 5)'
         )
         
+        # test-keys 命令
+        test_keys_parser = subparsers.add_parser(
+            'test-keys',
+            help='Test all available keys using Gemini API'
+        )
+        test_keys_parser.add_argument(
+            '--max-retries',
+            type=int,
+            default=1,
+            help='Max retries per key (default: 1)'
+        )
+        test_keys_parser.add_argument(
+            '--retry-delay',
+            type=float,
+            default=0.5,
+            help='Retry delay in seconds (default: 0.5)'
+        )
+        test_keys_parser.add_argument(
+            '--page-size',
+            type=int,
+            default=10,
+            help='Page size for models.list API call (default: 10)'
+        )
+        
         return parser
     
     def run(self, args: Optional[list] = None):
@@ -248,6 +272,8 @@ Examples:
             return self._cleanup_keys(balancer, args)
         elif args.command == 'monitor':
             return self._monitor_keys(balancer, args)
+        elif args.command == 'test-keys':
+            return self._test_keys(balancer, args)
         else:
             print(f"❌ Unknown command: {args.command}")
             return 1
@@ -553,6 +579,104 @@ Examples:
         except KeyboardInterrupt:
             print("\n\n✅ Monitoring stopped")
             return 0
+    
+    def _test_keys(self, balancer: KeyBalancer, args):
+        """测试所有可用的 keys"""
+        try:
+            from .gemini_client import create_gemini_wrapper
+        except ImportError:
+            print("❌ Error: google-genai package not available. Install with: pip install google-genai")
+            return 1
+        
+        print("🧪 Testing all available keys using Gemini API...")
+        print(f"📊 Max retries per key: {args.max_retries}")
+        print(f"⏱️  Retry delay: {args.retry_delay} seconds")
+        print(f"📄 Page size: {args.page_size}")
+        print("=" * 80)
+        
+        # 创建 Gemini 包装器，使用传入的 balancer
+        wrapper = create_gemini_wrapper(
+            balancer=balancer,
+            max_retries=args.max_retries,
+            retry_delay=args.retry_delay
+        )
+        
+        # 获取所有可用的 keys
+        available_keys = balancer.key_manager.get_available_keys()
+        if not available_keys:
+            print("❌ No available keys found")
+            return 1
+        
+        print(f"🔑 Found {len(available_keys)} available keys")
+        print()
+        
+        # 测试每个 key
+        test_results = []
+        total_keys = len(available_keys)
+        
+        for i, key in enumerate(available_keys, 1):
+            key_value = key.key
+            print(f"🔍 Testing key {i}/{total_keys}: {key_value[:20]}...")
+            
+            try:
+                # 定义测试操作：调用 models.list API
+                def test_operation(client):
+                    return client.models.list(config={"pageSize": args.page_size})
+                
+                # 执行测试
+                result = wrapper.execute_with_retry(test_operation)
+                
+                # 测试成功
+                print(f"✅ Key {i}/{total_keys} - SUCCESS")
+                if hasattr(result, 'models'):
+                    print(f"   📊 Models found: {len(result.models)}")
+                else:
+                    print(f"   📊 Result type: {type(result)}")
+                
+                test_results.append({
+                    'key': key_value[:20] + '...',
+                    'status': 'SUCCESS',
+                    'models_count': len(result.models) if hasattr(result, 'models') else 'N/A'
+                })
+                
+            except Exception as e:
+                # 测试失败
+                print(f"❌ Key {i}/{total_keys} - FAILED: {e}")
+                test_results.append({
+                    'key': key_value[:20] + '...',
+                    'status': 'FAILED',
+                    'error': str(e)
+                })
+            
+            print("-" * 60)
+        
+        # 显示测试结果摘要
+        print("\n📊 Test Results Summary")
+        print("=" * 80)
+        
+        successful_keys = [r for r in test_results if r['status'] == 'SUCCESS']
+        failed_keys = [r for r in test_results if r['status'] == 'FAILED']
+        
+        print(f"✅ Successful: {len(successful_keys)}/{total_keys}")
+        print(f"❌ Failed: {len(failed_keys)}/{total_keys}")
+        print(f"📈 Success Rate: {(len(successful_keys)/total_keys)*100:.1f}%")
+        
+        if failed_keys:
+            print("\n❌ Failed Keys:")
+            for result in failed_keys:
+                print(f"   {result['key']}: {result['error']}")
+        
+        if successful_keys:
+            print("\n✅ Successful Keys:")
+            for result in successful_keys:
+                print(f"   {result['key']}: {result['models_count']} models")
+        
+        # 更新数据库中的 key 状态
+        print("\n🔄 Updating key health status in database...")
+        balancer.save_state_now()
+        print("✅ Database updated")
+        
+        return 0
 
 
 def main():

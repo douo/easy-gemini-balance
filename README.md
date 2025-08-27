@@ -1,291 +1,267 @@
 # Easy Gemini Balance
 
-一个用于动态 API key 均衡的 Python 模块，支持 LRU 缓存、权重管理和 SQLite 持久化。
+智能 API Key 管理和负载均衡工具，支持 Google Gemini API 的自动重试和健康监控。
 
-## ✨ 核心特性
+## 特性
 
-- **动态均衡**: 基于 LRU 缓存和权重的智能 key 选择
-- **健康监控**: 自动根据 HTTP 错误码调整 key 权重和可用性
-- **高性能**: 针对大量 key（1000+）优化的选择算法
-- **持久化**: 使用 SQLite 高效存储 key 状态
-- **多种使用模式**: 支持自动成功、上下文管理器和装饰器三种模式
+- 🔑 **智能 Key 管理**: LRU 缓存 + 权重分配
+- 🔄 **自动重试**: 失败时自动切换 Key 并重试
+- 📊 **健康监控**: 实时监控 Key 状态和性能
+- ⚡ **性能优化**: 支持 1000+ keys 的高效管理
+- 🛠️ **CLI 工具**: 完整的命令行管理界面
+- 🐍 **Python API**: 简单易用的 Python 接口
 
-## 🚀 快速开始
+## 快速开始
 
 ### 安装
 
 ```bash
-# 从源码安装
-git clone https://github.com/yourusername/easy-gemini-balance.git
-cd easy-gemini-balance
-uv sync
-uv run python -m pip install -e .
+# 使用 uv (推荐)
+uv add easy-gemini-balance
+
+# 或使用 pip
+pip install easy-gemini-balance
 ```
 
 ### 基本使用
 
 ```python
-from easy_gemini_balance import KeyBalancer
+from easy_gemini_balance import create_gemini_wrapper
 
-# 创建 balancer 实例
-balancer = KeyBalancer(
-    keys_file="keys.txt",      # API keys 文件路径
-    db_path="keys.db",         # SQLite 数据库路径
-    auto_success=True          # 启用自动成功模式
+# 创建包装器
+wrapper = create_gemini_wrapper(
+    max_retries=3,
+    retry_delay=1.0
 )
 
-# 获取单个 key
-key = balancer.get_single_key()
+# 添加 API keys
+wrapper.add_key("your_api_key_1", weight=1.0)
+wrapper.add_key("your_api_key_2", weight=1.5)
 
-# 获取多个 keys
-keys = balancer.get_keys(count=3)
+# 使用 API
+def generate_text(client):
+    return client.generate_content("Hello, Gemini!")
 
-# 更新 key 健康状态
-balancer.update_key_health(key, error_code=403)  # 失败
-balancer.update_key_health(key, success=True)    # 成功
+# 自动重试和 Key 管理
+result = wrapper.execute_with_retry(generate_text)
 ```
 
-## 🎯 三种使用模式
+## 核心功能
 
-### 方案1：自动成功模式（推荐）
+> **注意**: 为了确保重试机制的可靠性，我们移除了上下文管理器支持，现在提供两种更稳定的重试方式。
 
-最简单的使用方式，适合大多数场景：
+### 1. 自动重试和 Key 管理
 
 ```python
-# 启用自动成功模式
-balancer = KeyBalancer(auto_success=True)
+# 使用 execute_with_retry
+def api_call(client):
+    return client.models.list(config={"pageSize": 10})
 
-# 获取 key 后自动标记为成功
-key = balancer.get_single_key()
-# 无需手动调用 update_key_health(key, success=True)
-
-# 失败时仍需要手动处理
-try:
-    result = make_api_call(key)
-except Exception as e:
-    balancer.update_key_health(key, error_code=500)
+result = wrapper.execute_with_retry(api_call)
 ```
 
-### 方案2：上下文管理器
-
-提供精确的成功/失败控制：
+### 2. 装饰器模式
 
 ```python
-# 关闭自动成功模式，使用上下文管理器
-balancer = KeyBalancer(auto_success=False)
+@wrapper.with_retry(max_retries=3)
+def my_function(client, prompt):
+    return client.generate_content(prompt)
 
-# 使用上下文管理器自动处理成功状态
-with balancer.get_key_context(count=1) as keys:
-    key = keys[0]
-    result = make_api_call(key)
-    # 上下文管理器退出时自动标记为成功
-
-# 异常情况需要手动处理
-try:
-    with balancer.get_key_context(count=1) as keys:
-        key = keys[0]
-        make_api_call(key)
-except Exception as e:
-    balancer.update_key_health(key, error_code=403)
+result = my_function("Hello")
 ```
 
-### 方案3：装饰器模式
-
-最优雅的函数式编程方式：
+### 4. 批量导入 Keys
 
 ```python
-# 使用装饰器自动管理 key
-@balancer.with_key_balancing(key_count=1, auto_success=True)
-def api_call_function():
-    # 装饰器会自动获取 key 并处理成功状态
-    return make_api_call()
+# 从文件导入
+wrapper.import_keys_from_file("keys.txt", source="imported")
 
-# 调用函数
-result = api_call_function()
+# 手动添加
+wrapper.add_key("key_value", weight=1.0, source="manual")
 ```
 
-## 📁 项目结构
-
-```
-easy-gemini-balance/
-├── src/easy_gemini_balance/
-│   ├── __init__.py          # 模块入口
-│   ├── balancer.py          # 核心均衡器（包含三种模式）
-│   ├── key_manager.py       # Key 管理器
-│   ├── store.py             # SQLite 存储后端
-│   └── cli.py               # 命令行工具
-├── tests/                   # 测试目录
-├── examples/                # 示例代码
-│   └── three_schemes_demo.py # 三种方案演示
-├── pyproject.toml           # 项目配置
-└── README.md               # 项目文档
-```
-
-## 🔧 开发环境使用
-
-### 作为模块导入
+### 5. 性能监控和统计
 
 ```python
-# 直接导入
-from easy_gemini_balance import KeyBalancer, KeyManager, APIKey
+# 获取详细统计信息
+stats = wrapper.get_stats()
+print(f"总 Keys: {stats['total_keys']}")
+print(f"可用 Keys: {stats['available_keys']}")
+print(f"缓存命中率: {stats['cache_stats']['hit_rate']:.2f}")
 
-# 创建实例
-balancer = KeyBalancer("keys.txt", db_path="keys.db")
-
-# 使用各种功能
-key = balancer.get_single_key()
-stats = balancer.get_stats()
+# 监控内存使用
+memory_info = wrapper.get_memory_usage()
+print(f"内存使用: {memory_info['total_memory_bytes']} bytes")
+print(f"预估 1000 个 keys 内存: {memory_info['estimated_1000_keys_memory_mb']:.2f} MB")
 ```
 
-### 运行测试
+## CLI 命令
 
 ```bash
-# 运行所有测试
-uv run python tests/run_tests.py --all
+# 显示统计信息
+easy-gemini-balance stats
 
-# 运行特定测试
-uv run python tests/run_tests.py --basic
-uv run python tests/run_tests.py --performance
-uv run python tests/run_tests.py --cli
+# 测试所有 Keys
+easy-gemini-balance test-keys --max-retries 2 --retry-delay 0.5
+
+# 导入 Keys 文件
+easy-gemini-balance import keys.txt
+
+# 显示健康状态
+easy-gemini-balance health
+
+# 添加单个 Key
+easy-gemini-balance add-key "your_api_key" --weight 1.5
+
+# 实时监控
+easy-gemini-balance monitor --interval 10
 ```
 
-### 运行示例
+## 高级配置
 
-```bash
-# 运行三种方案演示
-uv run python examples/three_schemes_demo.py
-```
-
-## 📊 API 参考
-
-### KeyBalancer 类
-
-#### 初始化参数
-
-- `keys_file`: API keys 文件路径
-- `cache_size`: LRU 缓存大小（默认 100）
-- `db_path`: SQLite 数据库路径
-- `auto_save`: 是否自动保存状态（默认 True）
-- `auto_success`: 是否启用自动成功模式（默认 True）
-
-#### 主要方法
-
-- `get_single_key()`: 获取单个 key
-- `get_keys(count)`: 获取指定数量的 keys
-- `get_key_context(count)`: 获取上下文管理器
-- `with_key_balancing(key_count, auto_success)`: 装饰器工厂
-- `update_key_health(key, error_code, success)`: 更新 key 健康状态
-- `get_stats()`: 获取统计信息
-
-## ⚡ 性能优势
-
-- **预计算权重**: 使用累积权重和二分查找优化选择
-- **智能缓存**: 根据 key 数量自动调整 LRU 缓存大小
-- **批量操作**: 支持批量获取 keys 减少数据库查询
-- **异步保存**: 后台线程自动保存状态，不阻塞主操作
-
-## 📝 完整示例
+### 自定义重试策略
 
 ```python
-from easy_gemini_balance import KeyBalancer
-import requests
+wrapper = create_gemini_wrapper(
+    max_retries=5,           # 最大重试次数
+    retry_delay=2.0,         # 重试延迟（秒）
+    db_path="custom.db"      # 自定义数据库路径
+)
+```
 
-# 创建 balancer
+### 权重分配
+
+```python
+# 高优先级 Key
+wrapper.add_key("premium_key", weight=2.0)
+
+# 普通 Key
+wrapper.add_key("normal_key", weight=1.0)
+
+# 备用 Key
+wrapper.add_key("backup_key", weight=0.5)
+```
+
+### LRU 缓存配置
+
+```python
+# 创建针对大量 keys 优化的 balancer
 balancer = KeyBalancer(
-    keys_file="api_keys.txt",
-    db_path="keys_state.db",
-    auto_success=True,  # 启用自动成功模式
-    cache_size=200
+    cache_size=500,        # 预期 5000 个 keys
+    auto_save=True,
+    auto_success=True
 )
 
-# 方案1：自动成功模式
-def simple_api_call():
-    key = balancer.get_single_key()
-    try:
-        response = requests.get(
-            "https://api.example.com/data",
-            headers={"Authorization": f"Bearer {key}"}
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as e:
-        # 根据错误码更新 key 健康状态
-        balancer.update_key_health(key, error_code=e.response.status_code)
-        raise
+# 性能优化配置
+balancer.optimize_for_large_keysets(5000)
 
-# 方案2：上下文管理器
-def controlled_api_call():
-    with balancer.get_key_context(count=1) as keys:
-        key = keys[0]
-        response = requests.get(
-            "https://api.example.com/data",
-            headers={"Authorization": f"Bearer {key}"}
-        )
-        response.raise_for_status()
-        return response.json()
-        # 上下文管理器自动处理成功状态
-
-# 方案3：装饰器模式
-@balancer.with_key_balancing(key_count=1)
-def decorated_api_call():
-    # 装饰器自动获取 key 并处理状态
-    response = requests.get(
-        "https://api.example.com/data",
-        headers={"Authorization": f"Bearer {key}"}
-    )
-    response.raise_for_status()
-    return response.json()
-
-# 使用示例
-try:
-    # 选择你喜欢的方案
-    result1 = simple_api_call()      # 方案1
-    result2 = controlled_api_call()  # 方案2
-    result3 = decorated_api_call()   # 方案3
-    
-    print("所有 API 调用成功！")
-    
-except Exception as e:
-    print(f"API 调用失败: {e}")
-
-# 查看统计信息
+# 监控缓存性能
 stats = balancer.get_stats()
-print(f"可用 keys: {stats['available_keys']}")
-print(f"错误 keys: {stats['error_keys']}")
+print(f"缓存命中率: {stats['cache_stats']['hit_rate']:.2f}")
+print(f"缓存大小: {stats['cache_stats']['size']}/{stats['cache_stats']['capacity']}")
 ```
 
-## 🛠️ 开发
+### 批量操作优化
 
-### 代码格式化
+```python
+# 批量获取 keys 以提高效率
+batch_sizes = [10, 20, 30]  # 不同批次大小
+key_batches = balancer.batch_get_keys(batch_sizes)
+
+# 预计算权重分布
+balancer._update_weight_distribution()
+```
+
+## 数据库结构
+
+使用 SQLite 存储，支持以下表：
+
+- `api_keys`: 存储 API keys 和健康状态
+- `import_history`: 记录导入历史
+- `key_usage`: 记录使用统计
+
+## 错误处理
+
+自动识别和处理常见错误：
+
+- `400`: API key 无效/过期
+- `403`: 权限不足/服务未启用
+- `429`: 配额超限
+- `500`: 服务器错误
+
+**重试策略**：
+- 失败时自动切换到下一个可用的 API key
+- 使用固定延迟重试（默认 1 秒）
+- 支持自定义最大重试次数和重试延迟
+- 智能错误分类，根据错误类型调整 key 权重
+
+## 性能优化
+
+- **LRU 缓存**：减少数据库查询，提高响应速度
+- **权重算法**：优化 Key 选择，支持智能负载均衡
+- **智能错误分类**：根据错误码自动调整权重
+- **重试机制**：固定延迟重试，避免指数退避的复杂性
+
+### LRU 缓存机制
+
+LRU (Least Recently Used) 缓存自动管理最近使用的 API keys：
+
+```python
+# 缓存大小自动优化
+balancer = KeyBalancer(
+    cache_size=100,        # 默认缓存大小
+    auto_save=True
+)
+
+# 针对大量 keys 的优化
+balancer.optimize_for_large_keysets(5000)  # 预期 5000 个 keys
+```
+
+**缓存策略**：
+- **小规模**（< 100 keys）：缓存大小 = 100
+- **中等规模**（100-1000 keys）：缓存大小 = key 数量的 10%
+- **大规模**（> 1000 keys）：缓存大小 = 1000
+
+### 权重分配系统
+
+权重系统实现智能负载均衡和自动健康管理：
+
+```python
+# 生产环境 - 高权重
+wrapper.add_key("prod_key_1", weight=2.0, source="production")
+wrapper.add_key("prod_key_2", weight=2.0, source="production")
+
+# 开发环境 - 标准权重
+wrapper.add_key("dev_key_1", weight=1.0, source="development")
+
+# 备用环境 - 低权重
+wrapper.add_key("backup_key", weight=0.5, source="backup")
+```
+
+**权重管理**：
+- **自动调整**：成功时权重增加 10%，失败时减少 20%
+- **错误分类**：400 错误标记为不可用，其他错误降低权重
+- **健康恢复**：连续成功时权重逐步恢复
+
+**最佳实践**：
+- 生产环境：权重 2.0-3.0，承担主要负载
+- 开发环境：权重 1.0，正常负载
+- 备用环境：权重 0.5，紧急备用
+
+## 开发
 
 ```bash
-uv run black src/ tests/ examples/
-uv run flake8 src/ tests/ examples/
+# 克隆仓库
+git clone https://github.com/your-repo/easy-gemini-balance.git
+cd easy-gemini-balance
+
+# 安装依赖
+uv sync
+
+# 运行测试
+uv run pytest
 ```
 
-### 运行测试
-
-```bash
-uv run python tests/run_tests.py --all
-```
-
-## 📦 打包和发布
-
-详细的打包和发布说明请参考 [RELEASE.md](RELEASE.md)。
-
-## 📄 许可证
+## 许可证
 
 MIT License - 详见 [LICENSE](LICENSE) 文件。
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
----
-
-🎯 **推荐使用策略**：
-- **简单场景**: 使用方案1（自动成功模式）
-- **需要精确控制**: 使用方案2（上下文管理器）  
-- **函数式编程**: 使用方案3（装饰器模式）
-
-详细的 CLI 使用说明请参考 [CLI.md](CLI.md)。
