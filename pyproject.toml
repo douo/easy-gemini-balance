@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "easy-gemini-balance"
-version = "0.3.0"
-description = "A Python module for dynamic API key balancing with LRU caching, weight management, and SQLite persistence"
+version = "0.4.0"
+description = "A Python module for dynamic API key balancing with LRU caching, weight management, SQLite persistence, and Google Gemini API integration"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"},
 ]
-keywords = ["api", "key", "balancing", "load-balancer", "lru", "cache", "sqlite", "gemini"]
+keywords = ["api", "key", "balancing", "load-balancer", "lru", "cache", "sqlite", "gemini", "google", "ai", "retry"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -27,17 +27,22 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Distributed Computing",
     "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "requests>=2.25.0",
 ]
 
 [project.optional-dependencies]
+gemini = [
+    "google-genai>=0.3.0",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
     "black>=21.0",
     "flake8>=3.8",
+    "build>=1.2.2.post1",
 ]
 test = [
     "pytest>=6.0",
