@@ -23,6 +23,15 @@ uv add easy-gemini-balance
 pip install easy-gemini-balance
 ```
 
+### 默认配置
+
+默认情况下，系统会自动在以下位置创建数据库：
+
+- **Linux/macOS**: `~/.local/share/easy-gemini-balance/keys.db`
+- **Windows**: `%APPDATA%/easy-gemini-balance/keys.db`
+
+数据库会自动创建并管理，无需手动配置。
+
 ### 基本使用
 
 ```python
@@ -125,9 +134,15 @@ easy-gemini-balance monitor --interval 10
 wrapper = create_gemini_wrapper(
     max_retries=5,           # 最大重试次数
     retry_delay=2.0,         # 重试延迟（秒）
-    db_path="custom.db"      # 自定义数据库路径
+    db_path="custom.db"      # 自定义数据库路径（可选）
 )
 ```
+
+**数据库路径说明**：
+- 如果不指定 `db_path`，系统会使用默认路径
+- 可以指定绝对路径：`/path/to/custom.db`
+- 可以指定相对路径：`./my_keys.db`
+- 支持 SQLite 数据库格式
 
 ### 权重分配
 
@@ -174,7 +189,11 @@ balancer._update_weight_distribution()
 
 ## 数据库结构
 
-使用 SQLite 存储，支持以下表：
+使用 SQLite 存储，默认位置：
+- **Linux/macOS**: `~/.local/share/easy-gemini-balance/keys.db`
+- **Windows**: `%APPDATA%/easy-gemini-balance/keys.db`
+
+支持以下表：
 
 - `api_keys`: 存储 API keys 和健康状态
 - `import_history`: 记录导入历史
