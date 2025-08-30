@@ -8,6 +8,7 @@ import time
 import functools
 from typing import List, Optional, Tuple, Callable, Any, Dict
 from collections import OrderedDict
+from datetime import datetime
 
 from .key_manager import KeyManager, APIKey
 
@@ -114,6 +115,10 @@ class KeyBalancer:
         self.selection_count = 0
         self.auto_success = auto_success
         
+        # 初始化权重分布相关属性
+        self._cumulative_weights = []
+        self._available_keys_list = []
+        
         # 性能优化：预计算权重分布
         self._update_weight_distribution()
     
@@ -125,21 +130,105 @@ class KeyBalancer:
             # 可以在这里添加其他成功逻辑，比如增加权重等
     
     def _update_weight_distribution(self):
-        """Update the weight distribution for faster selection."""
+        """Update the weight distribution with time-based LRU decay."""
         available_keys = self.key_manager.get_available_keys()
         if not available_keys:
             return
         
-        # 计算总权重和累积权重
-        total_weight = sum(key.weight for key in available_keys)
-        self._cumulative_weights = []
-        self._available_keys_list = available_keys
+        current_time = time.time()
         
-        if total_weight > 0:
+        # 计算每个key的时间衰减权重
+        time_adjusted_keys = []
+        for key in available_keys:
+            # 基础权重
+            base_weight = key.weight
+            
+            # 时间衰减权重（指数下降）
+            time_decay_weight = self._calculate_time_decay_weight(key.last_used, current_time)
+            
+            # 总权重 = 基础权重 * 时间衰减权重，保留两位小数
+            total_weight = round(base_weight * time_decay_weight, 2)
+            
+            # 创建带时间调整权重的key对象副本
+            adjusted_key = type('TimeAdjustedKey', (), {
+                'key': key.key,
+                'weight': total_weight,
+                'original_weight': base_weight,
+                'time_decay': time_decay_weight,
+                'last_used': key.last_used,
+                'is_available': key.is_available,
+                'error_count': key.error_count,
+                'consecutive_errors': key.consecutive_errors,
+                'last_error': key.last_error,
+                'added_time': key.added_time,
+                'source': key.source
+            })()
+            
+            time_adjusted_keys.append(adjusted_key)
+        
+        # 按权重降序排序
+        time_adjusted_keys.sort(key=lambda k: k.weight, reverse=True)
+        
+        # 找到权重最高的key的权重值
+        max_weight = time_adjusted_keys[0].weight if time_adjusted_keys else 0
+        
+        # 筛选出权重最高的keys（允许0.01的误差）
+        top_weight_keys = [k for k in time_adjusted_keys if abs(k.weight - max_weight) <= 0.01]
+        
+        # 如果高权重keys太少，添加一些次高权重的keys以确保可用性
+        min_available_keys = 3  # 至少保持3个keys可用
+        if len(top_weight_keys) < min_available_keys and len(time_adjusted_keys) >= min_available_keys:
+            # 添加次高权重的keys
+            remaining_keys = [k for k in time_adjusted_keys if k not in top_weight_keys]
+            additional_keys = remaining_keys[:min_available_keys - len(top_weight_keys)]
+            top_weight_keys.extend(additional_keys)
+        
+        # 更新权重分布
+        self._cumulative_weights = []
+        self._available_keys_list = top_weight_keys
+        
+        if top_weight_keys:
+            total_weight = sum(key.weight for key in top_weight_keys)
             cumulative = 0
-            for key in available_keys:
+            for key in top_weight_keys:
                 cumulative += key.weight
                 self._cumulative_weights.append((cumulative, key))
+    
+    def _calculate_time_decay_weight(self, last_used: Optional[datetime], current_time: float) -> float:
+        """
+        计算基于时间的权重衰减。
+        
+        时间衰减规则：
+        - 10秒内：降权 0.5
+        - 1分钟内：降权 0.1
+        - 使用指数下降：weight = base_weight * (0.5 ^ (time_diff / 10))
+        
+        Args:
+            last_used: 上次使用时间（datetime对象）
+            current_time: 当前时间戳（float）
+            
+        Returns:
+            时间衰减权重（0.0 到 1.0 之间）
+        """
+        if last_used is None:
+            return 1.0  # 从未使用过的key保持原权重
+        
+        # 将datetime转换为timestamp
+        last_used_timestamp = last_used.timestamp()
+        time_diff = current_time - last_used_timestamp
+        
+        if time_diff <= 0:
+            return 1.0  # 刚刚使用过，保持原权重
+        
+        # 指数下降：以10秒为基准周期，0.5为衰减因子
+        # weight = 0.5 ^ (time_diff / 10)
+        decay_factor = 0.5
+        time_period = 10.0  # 10秒
+        
+        time_decay_weight = decay_factor ** (time_diff / time_period)
+        
+        # 确保权重在合理范围内
+        return max(0.01, min(1.0, time_decay_weight))
     
     def get_keys(self, count: int = 1) -> List[str]:
         """
@@ -155,13 +244,15 @@ class KeyBalancer:
         if count <= 0:
             return []
         
-        available_keys = self.key_manager.get_available_keys()
-        if not available_keys:
+        # 每次获取keys时都更新权重分布（包含时间衰减）
+        self._update_weight_distribution()
+        
+        if not self._available_keys_list:
             raise RuntimeError("No available API keys")
         
-        if count > len(available_keys):
+        if count > len(self._available_keys_list):
             # If requesting more keys than available, return all available
-            count = len(available_keys)
+            count = len(self._available_keys_list)
         
         # Apply rate limiting to prevent too frequent selections
         current_time = time.time()
@@ -170,23 +261,23 @@ class KeyBalancer:
         
         selected_keys = []
         
-        # 对于大量key，使用优化的选择策略
-        if len(available_keys) > 100:
-            selected_keys = self._fast_weighted_selection(available_keys, count)
+        # 从权重最高的keys中进行随机选择
+        if count >= len(self._available_keys_list):
+            selected_keys = self._available_keys_list.copy()
         else:
-            selected_keys = self._standard_weighted_selection(available_keys, count)
+            selected_keys = random.sample(self._available_keys_list, count)
         
         # Update LRU cache and mark keys as used
         for key in selected_keys:
             self.lru_cache.put(key.key, key)
-            key.mark_used()
+            # 从key_manager的keys列表中查找对应的key对象
+            for original_key_obj in self.key_manager.keys:
+                if original_key_obj.key == key.key:
+                    original_key_obj.mark_used()
+                    break
         
         self.last_selection_time = time.time()
         self.selection_count += 1
-        
-        # 定期更新权重分布
-        if self.selection_count % 100 == 0:
-            self._update_weight_distribution()
         
         # 方案1：自动成功模式
         key_strings = [key.key for key in selected_keys]
@@ -285,7 +376,6 @@ class KeyBalancer:
         keys = self.get_keys(1)
         return keys[0] if keys else None
     
-    # 方案2：上下文管理器
     def get_key_context(self, count: int = 1) -> KeyContext:
         """
         Get a context manager for automatic key health management.
@@ -361,12 +451,17 @@ class KeyBalancer:
         stats = self.key_manager.get_key_stats()
         cache_stats = self.lru_cache.get_stats()
         
+        # 更新权重分布以获取当前状态
+        self._update_weight_distribution()
+        
         stats.update({
             'cache_stats': cache_stats,
             'last_selection_time': self.last_selection_time,
             'selection_count': self.selection_count,
             'min_selection_interval': self.min_selection_interval,
             'auto_success_enabled': self.auto_success,
+            'current_top_weight_keys': len(self._available_keys_list) if hasattr(self, '_available_keys_list') else 0,
+            'weight_distribution_updated': hasattr(self, '_cumulative_weights') and len(self._cumulative_weights) > 0,
         })
         
         return stats
@@ -454,10 +549,12 @@ class KeyBalancer:
             List of key batches
         """
         total_requested = sum(batch_sizes)
-        available_keys = self.key_manager.get_available_keys()
         
-        if total_requested > len(available_keys):
-            raise RuntimeError(f"Requested {total_requested} keys but only {len(available_keys)} available")
+        # 更新权重分布
+        self._update_weight_distribution()
+        
+        if total_requested > len(self._available_keys_list):
+            raise RuntimeError(f"Requested {total_requested} keys but only {len(self._available_keys_list)} available")
         
         # 一次性获取所有需要的keys
         all_keys = self.get_keys(total_requested)
