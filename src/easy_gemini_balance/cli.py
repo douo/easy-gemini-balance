@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from .balancer import KeyBalancer
+from .key_manager import KeyManager
 from .gemini_client import GeminiClientWrapper
 
 
@@ -245,31 +246,35 @@ Examples:
     
     def _execute_command(self, args):
         """执行具体的命令"""
-        # 创建 KeyBalancer 实例
-        balancer = KeyBalancer(db_path=args.db_path)
+        # 创建 KeyManager 实例用于数据库操作
+        key_manager = KeyManager(db_path=args.db_path)
+        
+        # 对于需要 KeyBalancer 的命令，创建 KeyBalancer 实例
+        if args.command in ['monitor', 'test-keys']:
+            balancer = KeyBalancer(db_path=args.db_path)
         
         if args.command == 'stats':
-            return self._show_stats(balancer, args)
+            return self._show_stats(key_manager, args)
         elif args.command == 'health':
-            return self._show_health(balancer, args)
+            return self._show_health(key_manager, args)
         elif args.command == 'db-info':
-            return self._show_db_info(balancer, args)
+            return self._show_db_info(key_manager, args)
         elif args.command == 'memory':
-            return self._show_memory(balancer, args)
+            return self._show_memory(key_manager, args)
         elif args.command == 'import':
-            return self._import_keys(balancer, args)
+            return self._import_keys(key_manager, args)
         elif args.command == 'add-key':
-            return self._add_key(balancer, args)
+            return self._add_key(key_manager, args)
         elif args.command == 'remove-key':
-            return self._remove_key(balancer, args)
+            return self._remove_key(key_manager, args)
         elif args.command == 'list':
-            return self._list_keys(balancer, args)
+            return self._list_keys(key_manager, args)
         elif args.command == 'import-history':
-            return self._show_import_history(balancer, args)
+            return self._show_import_history(key_manager, args)
         elif args.command == 'reset':
-            return self._reset_keys(balancer, args)
+            return self._reset_keys(key_manager, args)
         elif args.command == 'cleanup':
-            return self._cleanup_keys(balancer, args)
+            return self._cleanup_keys(key_manager, args)
         elif args.command == 'monitor':
             return self._monitor_keys(balancer, args)
         elif args.command == 'test-keys':
@@ -278,9 +283,9 @@ Examples:
             print(f"❌ Unknown command: {args.command}")
             return 1
     
-    def _show_stats(self, balancer: KeyBalancer, args):
+    def _show_stats(self, key_manager: KeyManager, args):
         """显示统计信息"""
-        stats = balancer.get_stats()
+        stats = key_manager.get_key_stats()
         
         if args.json:
             print(json.dumps(stats, indent=2, default=str))
@@ -309,9 +314,9 @@ Examples:
         
         return 0
     
-    def _show_health(self, balancer: KeyBalancer, args):
+    def _show_health(self, key_manager: KeyManager, args):
         """显示健康状态"""
-        stats = balancer.get_stats()
+        stats = key_manager.get_key_stats()
         
         if args.json:
             print(json.dumps(stats, indent=2, default=str))
@@ -342,9 +347,17 @@ Examples:
         
         return 0
     
-    def _show_db_info(self, balancer: KeyBalancer, args):
+    def _show_db_info(self, key_manager: KeyManager, args):
         """显示数据库信息"""
-        db_info = balancer.get_database_info()
+        stats = key_manager.get_key_stats()
+        db_info = {
+            'database_path': key_manager.db_path,
+            'database_size_mb': stats.get('database_size_mb', 0),
+            'total_keys_in_db': stats.get('total_keys', 0),
+            'available_keys_in_db': stats.get('available_keys', 0),
+            'average_weight': stats.get('average_weight', 0),
+            'source_distribution': stats.get('source_distribution', {}),
+        }
         
         if args.json:
             print(json.dumps(db_info, indent=2, default=str))
@@ -365,9 +378,9 @@ Examples:
         
         return 0
     
-    def _show_memory(self, balancer: KeyBalancer, args):
+    def _show_memory(self, key_manager: KeyManager, args):
         """显示内存使用信息"""
-        memory_info = balancer.get_memory_usage()
+        memory_info = key_manager.get_memory_usage()
         
         if args.json:
             print(json.dumps(memory_info, indent=2, default=str))
@@ -383,7 +396,7 @@ Examples:
         
         return 0
     
-    def _import_keys(self, balancer: KeyBalancer, args):
+    def _import_keys(self, key_manager: KeyManager, args):
         """导入 keys 文件"""
         file_path = Path(args.file_path)
         
@@ -395,7 +408,7 @@ Examples:
         print(f"Source: {args.source}")
         
         try:
-            result = balancer.import_keys_from_file(str(file_path), args.source)
+            result = key_manager.import_keys_from_file(str(file_path), args.source)
             
             if args.json:
                 print(json.dumps(result, indent=2, default=str))
@@ -419,14 +432,14 @@ Examples:
             print(f"❌ Import failed: {e}")
             return 1
     
-    def _add_key(self, balancer: KeyBalancer, args):
+    def _add_key(self, key_manager: KeyManager, args):
         """添加单个 key"""
         print(f"➕ Adding key: {args.key_value[:20]}...")
         print(f"Weight: {args.weight}")
         print(f"Source: {args.source}")
         
         try:
-            success = balancer.add_key(args.key_value, args.weight, args.source)
+            success = key_manager.add_key(args.key_value, args.weight, args.source)
             
             if success:
                 print("✅ Key added successfully")
@@ -439,12 +452,12 @@ Examples:
             print(f"❌ Failed to add key: {e}")
             return 1
     
-    def _remove_key(self, balancer: KeyBalancer, args):
+    def _remove_key(self, key_manager: KeyManager, args):
         """移除 key"""
         print(f"🗑️  Removing key: {args.key_value[:20]}...")
         
         try:
-            success = balancer.remove_key(args.key_value)
+            success = key_manager.remove_key(args.key_value)
             
             if success:
                 print("✅ Key removed successfully")
@@ -457,9 +470,9 @@ Examples:
             print(f"❌ Failed to remove key: {e}")
             return 1
     
-    def _list_keys(self, balancer: KeyBalancer, args):
+    def _list_keys(self, key_manager: KeyManager, args):
         """列出所有 keys"""
-        stats = balancer.get_stats()
+        stats = key_manager.get_key_stats()
         keys = stats['keys']
         
         if args.available_only:
@@ -498,9 +511,9 @@ Examples:
         print(f"{status} {key['key']} | Weight: {key['weight']} | "
               f"Errors: {key['error_count']} | Source: {key.get('source', 'unknown')}")
     
-    def _show_import_history(self, balancer: KeyBalancer, args):
+    def _show_import_history(self, key_manager: KeyManager, args):
         """显示导入历史"""
-        history = balancer.get_import_history()
+        history = key_manager.get_import_history()
         
         if args.json:
             print(json.dumps(history, indent=2, default=str))
@@ -523,7 +536,7 @@ Examples:
         
         return 0
     
-    def _reset_keys(self, balancer: KeyBalancer, args):
+    def _reset_keys(self, key_manager: KeyManager, args):
         """重置 key 权重和健康状态"""
         if not args.confirm:
             print("⚠️  This will reset all key weights and health status!")
@@ -533,14 +546,14 @@ Examples:
         print("🔄 Resetting all key weights and health status...")
         
         try:
-            balancer.reset_all_weights()
+            key_manager.reset_all_weights()
             print("✅ All keys have been reset")
             return 0
         except Exception as e:
             print(f"❌ Reset failed: {e}")
             return 1
     
-    def _cleanup_keys(self, balancer: KeyBalancer, args):
+    def _cleanup_keys(self, key_manager: KeyManager, args):
         """清理旧的未使用的 keys"""
         if not args.confirm:
             print(f"⚠️  This will remove keys unused for {args.days} days!")
@@ -550,7 +563,7 @@ Examples:
         print(f"🧹 Cleaning up keys unused for {args.days} days...")
         
         try:
-            removed_count = balancer.cleanup_old_keys(args.days)
+            removed_count = key_manager.cleanup_old_keys(args.days)
             print(f"✅ Cleanup completed: {removed_count} keys removed")
             return 0
         except Exception as e:
