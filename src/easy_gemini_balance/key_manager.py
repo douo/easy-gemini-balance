@@ -42,8 +42,14 @@ class APIKey:
         if error_code == 400:
             # 400 错误表示 key 不可用
             self.is_available = False
-        elif error_code in [403, 429, 500, 502, 503, 504]:
-            # 其他错误码降低权重
+        elif error_code == 403:
+            # 403 错误表示 key 被暂停/禁用
+            self.is_available = False
+        elif error_code == 429:
+            # 429 错误表示配额限制，大幅降低权重但不禁用
+            self.weight = max(self.min_weight, self.weight * 0.1)  # 大幅降低权重到 0.1
+        elif error_code in [500, 502, 503, 504]:
+            # 服务器错误，降低权重但不禁用
             self.weight = max(self.min_weight, self.weight * 0.8)
         else:
             # 其他错误码轻微降低权重
@@ -572,6 +578,8 @@ class SQLiteKeyStore:
             conn.close()
             
             return deleted_count
+    
+
     
     def get_stats(self) -> Dict:
         """Get database statistics."""

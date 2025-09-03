@@ -124,75 +124,55 @@ class KeyBalancer:
     
     def _mark_key_success(self, key_value: str):
         """Internal method: mark key as successful."""
-        if key_value in self.key_manager.keys:
-            key_obj = self.key_manager.keys[key_value]
-            key_obj.last_used = time.time()
+        key_obj = self.key_manager.get_key_by_value(key_value)
+        if key_obj:
+            key_obj.last_used = datetime.now()
             # 可以在这里添加其他成功逻辑，比如增加权重等
+            print(f"✅ Key 成功: {key_value[:20]}... | 权重: {key_obj.weight:.2f} | 错误次数: {key_obj.error_count}")
     
     def _update_weight_distribution(self):
-        """Update the weight distribution with time-based LRU decay."""
+        """Update the weight distribution with proper LRU selection."""
         available_keys = self.key_manager.get_available_keys()
         if not available_keys:
+            self._available_keys_list = []
+            self._cumulative_weights = []
             return
         
-        current_time = time.time()
+        # 按 LRU 原则排序：last_used 为 None 的排在前面（从未使用过），然后按 last_used 升序
+        lru_sorted_keys = sorted(available_keys, key=lambda k: (k.last_used is None, k.last_used or datetime.min))
         
-        # 计算每个key的时间衰减权重
-        time_adjusted_keys = []
-        for key in available_keys:
-            # 基础权重
-            base_weight = key.weight
-            
-            # 时间衰减权重（指数下降）
-            time_decay_weight = self._calculate_time_decay_weight(key.last_used, current_time)
-            
-            # 总权重 = 基础权重 * 时间衰减权重，保留两位小数
-            total_weight = round(base_weight * time_decay_weight, 2)
-            
-            # 创建带时间调整权重的key对象副本
-            adjusted_key = type('TimeAdjustedKey', (), {
-                'key': key.key,
-                'weight': total_weight,
-                'original_weight': base_weight,
-                'time_decay': time_decay_weight,
-                'last_used': key.last_used,
-                'is_available': key.is_available,
-                'error_count': key.error_count,
-                'consecutive_errors': key.consecutive_errors,
-                'last_error': key.last_error,
-                'added_time': key.added_time,
-                'source': key.source
-            })()
-            
-            time_adjusted_keys.append(adjusted_key)
+        # 过滤掉最近有 429 错误的 keys（冷却期）
+        current_time = datetime.now()
+        filtered_keys = []
         
-        # 按权重降序排序
-        time_adjusted_keys.sort(key=lambda k: k.weight, reverse=True)
+        for key in lru_sorted_keys:
+            # 如果最近有 429 错误，检查是否在冷却期内
+            if key.last_error and key.weight <= 0.2:  # 权重很低说明可能有 429 错误
+                time_since_error = current_time - key.last_error
+                if time_since_error.total_seconds() < 300:  # 5分钟冷却期
+                    continue  # 跳过这个 key
+            filtered_keys.append(key)
         
-        # 找到权重最高的key的权重值
-        max_weight = time_adjusted_keys[0].weight if time_adjusted_keys else 0
+        # 如果没有过滤后的 keys，使用原始列表
+        if not filtered_keys:
+            filtered_keys = lru_sorted_keys
         
-        # 筛选出权重最高的keys（允许0.01的误差）
-        top_weight_keys = [k for k in time_adjusted_keys if abs(k.weight - max_weight) <= 0.01]
-        
-        # 如果高权重keys太少，添加一些次高权重的keys以确保可用性
-        min_available_keys = 3  # 至少保持3个keys可用
-        if len(top_weight_keys) < min_available_keys and len(time_adjusted_keys) >= min_available_keys:
-            # 添加次高权重的keys
-            remaining_keys = [k for k in time_adjusted_keys if k not in top_weight_keys]
-            additional_keys = remaining_keys[:min_available_keys - len(top_weight_keys)]
-            top_weight_keys.extend(additional_keys)
+        # 只选择前 5 个最少使用的 keys，避免总是选择相同的 key
+        max_keys_to_consider = min(5, len(filtered_keys))
+        selected_keys = filtered_keys[:max_keys_to_consider]
         
         # 更新权重分布
+        self._available_keys_list = selected_keys
         self._cumulative_weights = []
-        self._available_keys_list = top_weight_keys
         
-        if top_weight_keys:
-            total_weight = sum(key.weight for key in top_weight_keys)
-            cumulative = 0
-            for key in top_weight_keys:
-                cumulative += key.weight
-                self._cumulative_weights.append((cumulative, key))
+        if selected_keys:
+            # 计算总权重
+            total_weight = sum(key.weight for key in selected_keys)
+            if total_weight > 0:
+                cumulative = 0
+                for key in selected_keys:
+                    cumulative += key.weight
+                    self._cumulative_weights.append((cumulative, key))
     
     def _calculate_time_decay_weight(self, last_used: Optional[datetime], current_time: float) -> float:
         """
@@ -261,11 +241,12 @@ class KeyBalancer:
         
         selected_keys = []
         
-        # 从权重最高的keys中进行随机选择
+        # 使用真正的 LRU 选择：选择最少使用的 keys
         if count >= len(self._available_keys_list):
             selected_keys = self._available_keys_list.copy()
         else:
-            selected_keys = random.sample(self._available_keys_list, count)
+            # 选择前 count 个最少使用的 keys
+            selected_keys = self._available_keys_list[:count]
         
         # Update LRU cache and mark keys as used
         for key in selected_keys:
@@ -274,6 +255,8 @@ class KeyBalancer:
             for original_key_obj in self.key_manager.keys:
                 if original_key_obj.key == key.key:
                     original_key_obj.mark_used()
+                    # 打印 key 使用信息
+                    print(f"🔑 使用 Key: {key.key[:20]}... | 权重: {key.weight:.2f} | 总使用次数: {self.selection_count + 1}")
                     break
         
         self.last_selection_time = time.time()

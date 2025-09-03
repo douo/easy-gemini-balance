@@ -63,11 +63,21 @@ class GeminiClientWrapper:
     def _handle_error(self, api_key: str, error: Exception, attempt: int):
         """处理错误，更新 key 健康状态"""
         error_code = self._extract_error_code(error)
-        print(f"🔑 当前使用的 key: {api_key[:20]}...")
+        
+        # 获取 key 的详细信息
+        key_obj = self.balancer.key_manager.get_key_by_value(api_key)
+        weight_before = key_obj.weight if key_obj else 0.0
+        error_count_before = key_obj.error_count if key_obj else 0
+        
+        print(f"🔑 当前使用的 key: {api_key[:20]}... | 权重: {weight_before:.2f} | 错误次数: {error_count_before}")
         print(f"❌ 错误详情: {error}")
         print(f"📊 错误代码: {error_code}")
         
         self.balancer.update_key_health(api_key, error_code=error_code)
+        
+        # 显示错误后的状态
+        if key_obj:
+            print(f"📉 错误后状态: 权重 {key_obj.weight:.2f} | 错误次数 {key_obj.error_count} | 可用: {key_obj.is_available}")
         
         if attempt < self.max_retries:
             print(f"⚠️  API 调用失败 (尝试 {attempt + 1}/{self.max_retries})，等待 {self.retry_delay} 秒后重试...")
@@ -127,7 +137,11 @@ class GeminiClientWrapper:
                 self._current_key = api_key
                 self._current_client = client
                 
-                print(f"🔑 尝试使用 key: {api_key[:20]}... (尝试 {attempt + 1}/{self.max_retries + 1})")
+                # 获取 key 的详细信息
+                key_obj = self.balancer.key_manager.get_key_by_value(api_key)
+                weight = key_obj.weight if key_obj else 0.0
+                error_count = key_obj.error_count if key_obj else 0
+                print(f"🔑 尝试使用 key: {api_key[:20]}... | 权重: {weight:.2f} | 错误次数: {error_count} | 尝试 {attempt + 1}/{self.max_retries + 1}")
                 
                 # 执行操作
                 result = operation(client, *args, **kwargs)
@@ -178,11 +192,24 @@ class GeminiClientWrapper:
                             # 使用传入的 client
                             client = args[0]
                             api_key = getattr(client, '_api_key', None)  # 尝试获取关联的 API key
+                            
+                            # 如果有 api_key，显示日志信息
+                            if api_key:
+                                key_obj = self.balancer.key_manager.get_key_by_value(api_key)
+                                weight = key_obj.weight if key_obj else 0.0
+                                error_count = key_obj.error_count if key_obj else 0
+                                print(f"🔑 使用传入的 key: {api_key[:20]}... | 权重: {weight:.2f} | 错误次数: {error_count} | 尝试 {attempt + 1}/{retry_count + 1}")
                         else:
                             # 创建新的 client
                             api_key, client = self._get_new_client()
                             self._current_key = api_key
                             self._current_client = client
+                            
+                            # 获取 key 的详细信息并打印日志
+                            key_obj = self.balancer.key_manager.get_key_by_value(api_key)
+                            weight = key_obj.weight if key_obj else 0.0
+                            error_count = key_obj.error_count if key_obj else 0
+                            print(f"🔑 尝试使用 key: {api_key[:20]}... | 权重: {weight:.2f} | 错误次数: {error_count} | 尝试 {attempt + 1}/{retry_count + 1}")
                         
                         # 调用函数
                         if args and hasattr(args[0], 'generate_content'):
