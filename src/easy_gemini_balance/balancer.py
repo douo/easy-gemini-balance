@@ -128,7 +128,6 @@ class KeyBalancer:
         if key_obj:
             key_obj.last_used = datetime.now()
             # 可以在这里添加其他成功逻辑，比如增加权重等
-            print(f"✅ Key 成功: {key_value[:20]}... | 权重: {key_obj.weight:.2f} | 错误次数: {key_obj.error_count}")
     
     def _update_weight_distribution(self):
         """Update the weight distribution with proper LRU selection."""

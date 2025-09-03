@@ -137,11 +137,7 @@ class GeminiClientWrapper:
                 self._current_key = api_key
                 self._current_client = client
                 
-                # 获取 key 的详细信息
-                key_obj = self.balancer.key_manager.get_key_by_value(api_key)
-                weight = key_obj.weight if key_obj else 0.0
-                error_count = key_obj.error_count if key_obj else 0
-                print(f"🔑 尝试使用 key: {api_key[:20]}... | 权重: {weight:.2f} | 错误次数: {error_count} | 尝试 {attempt + 1}/{self.max_retries + 1}")
+                # 注意：key 使用日志已经在 balancer.get_single_key() 中打印了
                 
                 # 执行操作
                 result = operation(client, *args, **kwargs)
@@ -205,11 +201,7 @@ class GeminiClientWrapper:
                             self._current_key = api_key
                             self._current_client = client
                             
-                            # 获取 key 的详细信息并打印日志
-                            key_obj = self.balancer.key_manager.get_key_by_value(api_key)
-                            weight = key_obj.weight if key_obj else 0.0
-                            error_count = key_obj.error_count if key_obj else 0
-                            print(f"🔑 尝试使用 key: {api_key[:20]}... | 权重: {weight:.2f} | 错误次数: {error_count} | 尝试 {attempt + 1}/{retry_count + 1}")
+                            # 注意：key 使用日志已经在 balancer.get_single_key() 中打印了
                         
                         # 调用函数
                         if args and hasattr(args[0], 'generate_content'):
